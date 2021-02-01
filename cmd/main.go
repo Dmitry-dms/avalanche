@@ -1,11 +1,24 @@
 package main
 
 import (
+	"context"
 	"log"
+	"net"
 	"net/http"
+	_ "net/http/pprof"
 	"os"
+	"os/signal"
+	"syscall"
+	"time"
 
 	"github.com/Dmitry-dms/websockets/internal/core"
+)
+
+var (
+	s     = new(http.Server)
+	serve = make(chan error, 1)
+	sig   = make(chan os.Signal, 1)
+	addr  = ":8080"
 )
 
 func main() {
@@ -49,9 +62,31 @@ func main() {
 	hub := core.NewHub()
 	infoLog := log.New(os.Stdout, "INFO\t", log.Ldate|log.Ltime)
 	engine := core.NewEngine(config, infoLog, hub)
-	http.HandleFunc("/", engine.HandleClient)
+	http.HandleFunc("/ws", engine.HandleClient)
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		log.Fatalf("listen %q error: %v", addr, err)
+	}
+	log.Printf("listening %s (%q)", ln.Addr(), addr)
+
 	go startServer(engine.MsgChannel)
-	log.Fatal(http.ListenAndServe(":8080", nil))
+	signal.Notify(sig, syscall.SIGTERM|syscall.SIGINT)
+	go func() { serve <- s.Serve(ln) }()
+
+	select {
+	case err := <-serve:
+		log.Fatal(err)
+	case sig := <-sig:
+		const timeout = 5 * time.Second
+
+		log.Printf("signal %q received; shutting down with %s timeout", sig, timeout)
+
+		ctx, _ := context.WithTimeout(context.Background(), timeout)
+		if err := s.Shutdown(ctx); err != nil {
+			log.Fatal(err)
+		}
+	}
+	//log.Fatal(http.ListenAndServe(":8080", nil))
 }
 func startServer(in chan string) {
 	mux := http.NewServeMux()

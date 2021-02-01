@@ -28,33 +28,24 @@ func (e *Engine) HandleWrite(c *Client) {
 	defer c.Connection.Close()
 	defer e.Logger.Println("connection was closed write")
 	for {
-		// if c.isClosed() {
-		// 	return
-		// }
-
-		msg := <-e.MsgChannel
-		err := c.Connection.Write([]byte(msg))
-		if err != nil {
-			e.Logger.Fatal(err)
-			return
+		if c.Connection.IsClosed(){
+			break
 		}
-
+		err := c.Connection.Write(e.MsgChannel)
+		if err != nil {
+			e.Logger.Println(err)
+			break
+		}
 	}
 }
 func (e *Engine) HandleRead(c *Client) {
 	defer c.Connection.Close()
 	defer e.Logger.Println("connection was closed read")
 	for {
-		// if c.isClosed() {
-		// 	return
-		// }
-
 		payload, _, err := c.Connection.Read()
 		if err != nil {
-			e.Logger.Fatal(err)
-			e.Logger.Println("handle read err")
-			//c.Connection.Closed=true
-			return
+			e.Logger.Println(err)
+			break
 		}
 		e.Logger.Printf("Meesage {%s}", payload)
 
@@ -63,15 +54,19 @@ func (e *Engine) HandleRead(c *Client) {
 
 func (e *Engine) HandleClient(w http.ResponseWriter, r *http.Request) {
 	conn, _, _, err := ws.UpgradeHTTP(r, w)
+	defer func() {
+		e.Logger.Println("connection was closed")
+		_ = conn.Close()
+	}()
 	if err != nil {
-		e.Logger.Fatal(err)
+		e.Logger.Println(err)
 	}
 	transport := websocket.NewWebsocketTransport(conn)
 	client := NewClient(transport)
 	err = e.Subs.addClient("test", client)
 	if err != nil {
-		e.Logger.Fatal(err)
+		e.Logger.Println(err)
 	}
 	go e.HandleWrite(client)
-	go e.HandleRead(client)
+	e.HandleRead(client)
 }
