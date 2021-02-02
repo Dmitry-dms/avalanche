@@ -1,4 +1,4 @@
-module github.com/Dmitry-dms/websockets
+module github.com/Dmitry-dms/avalanche
 
 go 1.15
 

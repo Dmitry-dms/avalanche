@@ -4,22 +4,22 @@ import (
 	"log"
 	"net/http"
 
-	"github.com/Dmitry-dms/websockets/pkg/websocket"
+	"github.com/Dmitry-dms/avalanche/pkg/websocket"
 	"github.com/gobwas/ws"
 )
 
 type Engine struct {
 	Conf       Config
 	Logger     *log.Logger
-	Subs       *ClientHub
+	Subs       *companyHub
 	MsgChannel chan string
 }
 
-func NewEngine(config Config, logger *log.Logger, hub *ClientHub) *Engine {
+func NewEngine(config Config, logger *log.Logger) *Engine {
 	return &Engine{
 		Conf:       config,
 		Logger:     logger,
-		Subs:       hub,
+		Subs:       newCompanyHub(),
 		MsgChannel: make(chan string),
 	}
 }
@@ -48,7 +48,6 @@ func (e *Engine) HandleRead(c *Client) {
 			break
 		}
 		e.Logger.Printf("Meesage {%s}", payload)
-
 	}
 }
 
@@ -62,8 +61,8 @@ func (e *Engine) HandleClient(w http.ResponseWriter, r *http.Request) {
 		e.Logger.Println(err)
 	}
 	transport := websocket.NewWebsocketTransport(conn)
-	client := NewClient(transport)
-	err = e.Subs.addClient("test", client)
+	client := NewClient(transport, "test-user")
+	err = e.Subs.GetCompanyClientHub("test").AddClient(client)
 	if err != nil {
 		e.Logger.Println(err)
 	}
