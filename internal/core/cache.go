@@ -1,27 +1,25 @@
-package in_memory_cache
+package core
 
 import (
 	"sync"
-
-	"github.com/Dmitry-dms/avalanche/internal/core"
 )
 
 type RamCache struct {
 	mu    sync.RWMutex
-	users map[string]*core.ClientHub
+	users map[string]*ClientHub
 }
 
 func NewRamCache() *RamCache {
 	return &RamCache{
-		users: make(map[string]*core.ClientHub),
+		users: make(map[string]*ClientHub),
 	}
 }
 func (r *RamCache) AddCompany(companyName string, maxUsers uint) {
 	r.mu.Lock()
-	r.users[companyName] = core.NewClientHub(maxUsers)
+	r.users[companyName] = newClientHub(maxUsers)
 	r.mu.Unlock()
 }
-func (r *RamCache) GetCompany(companyName string) *core.ClientHub {
+func (r *RamCache) GetCompany(companyName string) *ClientHub {
 	r.mu.Lock()
 	hub := r.users[companyName]
 	r.mu.Unlock()
@@ -32,23 +30,26 @@ func (r *RamCache) DeleteCompany(companyName string) {
 	delete(r.users, companyName)
 	r.mu.Unlock()
 }
-func (r *RamCache) AddClient(companyName string, client *core.Client) error {
+func (r *RamCache) AddClient(companyName string, client *Client) (error, deleteClientFn) {
 	r.mu.Lock()
 	err := r.users[companyName].AddClient(client)
 	r.mu.Unlock()
-	return err
+	return err, func() error {return r.deleteClient(companyName, client.UserId)}
 }
-func (r *RamCache) DeleteClient(companyName, clientId string) error {
+func (r *RamCache) deleteClient(companyName, clientId string) error {
 	r.mu.Lock()
 	err := r.users[companyName].DeleteClient(clientId)
 	r.mu.Unlock()
 	return err
 }
-func (r *RamCache) GetClient(companyName, clientId string) (*core.Client, bool) {
+func (r *RamCache) GetClient(companyName, clientId string) (*Client, bool) {
 	r.mu.RLock()
-	client, ok := r.users[companyName].Get(clientId)
+	client, ok := r.users[companyName].get(clientId)
 	r.mu.RUnlock()
 	return client, ok
+}
+func (r *RamCache) GetActiveUsers() uint {
+	return uint(r.users["test"].GetNumActiveUsers())
 }
 func (r *RamCache) DeleteOfflineClients() {
 	r.mu.RLock()
@@ -58,6 +59,7 @@ func (r *RamCache) DeleteOfflineClients() {
 			if cl.Connection.IsClosed() {
 				r.mu.Lock()
 				if err := r.users[companyName].DeleteClient(cl.UserId); err != nil {
+					r.mu.Unlock()
 					continue
 				}
 				r.mu.Unlock()
@@ -66,11 +68,4 @@ func (r *RamCache) DeleteOfflineClients() {
 	}
 }
 
-type AvalacnheCache interface {
-	AddCompany(companyName string, maxUsers uint)
-	DeleteCompany(companyName string)
-	AddClient(companyName, clientId string, client *core.Client) error
-	GetClient(companyName, clientId string) (*core.Client, bool)
-	DeleteClient(companyName, clientId string) error
-	DeleteOfflineClients()
-}
+

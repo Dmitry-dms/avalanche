@@ -1,24 +1,49 @@
 package websocket
 
 import (
-	"fmt"
+	//"fmt"
+	"context"
+
+
+
 	"io/ioutil"
-	//"io/ioutil"
-	//"log"
 	"net"
 	"sync"
+
+	//"time"
 
 	"github.com/gobwas/ws"
 	"github.com/gobwas/ws/wsutil"
 )
-
-const websocketTransportName = "websocket"
 
 type CustomWebsocketTransport struct {
 	mu      sync.RWMutex
 	closed  bool
 	closeCh chan struct{}
 	conn    net.Conn
+}
+type CustomCancelContext struct {
+	context.Context
+	ch <-chan struct{}
+}
+
+func NewCustomContext() CustomCancelContext {
+	return CustomCancelContext{
+		context.TODO(),
+		make(<-chan struct{}),
+	}
+}
+func (c CustomCancelContext) Done() <-chan struct{} {
+	return c.ch
+}
+
+func (c CustomCancelContext) Err() error {
+	select {
+	case <-c.ch:
+		return context.Canceled
+	default:
+		return nil
+	}
 }
 
 func NewWebsocketTransport(conn net.Conn) *CustomWebsocketTransport {
@@ -35,30 +60,16 @@ func (t *CustomWebsocketTransport) CloseCh() chan struct{} {
 	return t.closeCh
 }
 
-// Name implementation.
-func (t *CustomWebsocketTransport) Name() string {
-	return websocketTransportName
-}
-
-// Protocol implementation.
-// func (t *customWebsocketTransport) Protocol() centrifuge.ProtocolType {
-// 	return t.protoType
-// }
-
-// Encoding implementation.
-// func (t *customWebsocketTransport) Encoding() centrifuge.EncodingType {
-// 	return centrifuge.EncodingTypeJSON
-// }
-
 func (t *CustomWebsocketTransport) Read() ([]byte, bool, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
 	h, r, err := wsutil.NextReader(t.conn, ws.StateServerSide)
 	if err != nil {
+		t.Close()
 		return nil, false, err
 	}
-	if h.OpCode == ws.OpPing{
+	if h.OpCode == ws.OpPing {
 		return nil, true, wsutil.WriteServerMessage(t.conn, ws.OpPong, []byte("pong"))
 	}
 	if h.OpCode.IsControl() {
@@ -73,36 +84,33 @@ func (t *CustomWebsocketTransport) Read() ([]byte, bool, error) {
 	return data, false, nil
 }
 
-func (t *CustomWebsocketTransport) Write(ch <-chan string ) error {
-	select {
-	case <-t.closeCh:
-		return nil
-	case msg:=<-ch:
-		messageType := ws.OpBinary
-		if err := wsutil.WriteServerMessage(t.conn, messageType, []byte(msg)); err != nil {
-			return err
+func (t *CustomWebsocketTransport) Write(ch <-chan string) error {
+	//for {
+		select {
+		case <-t.closeCh:
+				return nil
+		case msg := <-ch:
+			messageType := ws.OpText
+			if err := wsutil.WriteServerMessage(t.conn, messageType, []byte(msg)); err != nil {
+				return err
+			}
+			return nil
 		}
-		return nil
-	}
+	//}
 }
 
-// Close implementation.
 func (t *CustomWebsocketTransport) Close() error {
-	t.mu.Lock()
-	fmt.Println("closing")
+	//t.mu.Lock()
+	//log.Println("CLOSING")
 	if t.closed {
-		t.mu.Unlock()
+		//t.mu.Unlock()
 		return nil
 	}
 	t.closed = true
+	t.closeCh <- struct{}{}
 	close(t.closeCh)
-	t.mu.Unlock()
-	// if disconnect != nil {
-	// 	data := ws.NewCloseFrameBody(ws.StatusCode(disconnect.Code), disconnect.CloseText())
-	// 	_ = wsutil.WriteServerMessage(t.conn, ws.OpClose, data)
-	// 	return t.conn.Close()
-	// }
-	data := ws.NewCloseFrameBody(ws.StatusNormalClosure, "")
-	_ = wsutil.WriteServerMessage(t.conn, ws.OpClose, data)
+	//t.mu.Unlock()
+	// data := ws.NewCloseFrameBody(ws.StatusNormalClosure, "closing connection")
+	// _ = wsutil.WriteServerMessage(t.conn, ws.OpClose, data)
 	return t.conn.Close()
 }

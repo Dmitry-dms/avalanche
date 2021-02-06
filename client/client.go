@@ -14,7 +14,9 @@ import (
 
 func main() {
 	ctx := context.Background()
+	//conn, _, _, err := ws.Dial(ctx, "ws://4.tcp.ngrok.io:11634/ws")
 	conn, _, _, err := ws.Dial(ctx, "ws://localhost:8080/ws")
+
 	defer conn.Close()
 	if err != nil {
 		log.Fatal(err)

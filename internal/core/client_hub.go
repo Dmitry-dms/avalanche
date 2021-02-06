@@ -14,7 +14,7 @@ type ClientHub struct {
 	maxUsers uint
 }
 
-func NewClientHub(maxUsers uint) *ClientHub {
+func newClientHub(maxUsers uint) *ClientHub {
 	return &ClientHub{
 		Users: make(map[string]*Client),
 		activeUsers: new(uint64),
@@ -36,7 +36,7 @@ func (c *ClientHub) AddClient(client *Client) error {
 }
 func (c *ClientHub) verifyClient(userId string) bool {
 	c.mu.RLock()
-	_, ok := c.Get(userId)
+	_, ok := c.get(userId)
 	c.mu.RUnlock()
 	return ok
 }
@@ -47,7 +47,7 @@ func (c *ClientHub) DeleteClient(userId string) error {
 	c.mu.Lock()
 	delete(c.Users,userId)
 	c.mu.Unlock()
-	atomic.AddUint64(c.activeUsers, 0)
+	atomic.AddUint64(c.activeUsers, ^uint64(0))
 	return nil
 }
 func (c *ClientHub) GetNumActiveUsers() uint64 {
@@ -62,7 +62,7 @@ func (c *ClientHub) GetUsers() []*Client {
 	c.mu.RUnlock()
 	return cl
 }
-func (c *ClientHub) Get(userId string) (*Client, bool) {
+func (c *ClientHub) get(userId string) (*Client, bool) {
 	c.mu.RLock()
 	client, ok := c.Users[userId]
 	c.mu.RUnlock()

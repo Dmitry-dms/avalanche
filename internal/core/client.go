@@ -1,14 +1,13 @@
 package core
 
-import (
-	"github.com/Dmitry-dms/avalanche/pkg/websocket"
-)
+import "github.com/Dmitry-dms/avalanche/pkg/websocket"
 
 type Client struct {
 	UserId string
 	MessageChan chan string
 	Connection  *websocket.CustomWebsocketTransport
 }
+type CloseFunc func() error
 
 func NewClient(transport *websocket.CustomWebsocketTransport, userId string) *Client {
 	return &Client{
@@ -20,6 +19,4 @@ func NewClient(transport *websocket.CustomWebsocketTransport, userId string) *Cl
 func (c *Client) isClosed() bool {
 	return c.Connection.IsClosed()
 }
-func (c *Client) getCh() chan struct{} {
-	return c.Connection.CloseCh()
-}
+
