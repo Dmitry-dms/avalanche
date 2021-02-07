@@ -1,32 +1,34 @@
 package main
 
 import (
-	//"fmt"
-
 	"log"
 	"net/http"
-
 	"os"
 	"time"
 
-	//"time"
-
-	//	"github.com/gobwas/ws/wsutil"
+//	"github.com/gobwas/ws"
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 )
 
 func main() {
 	interrupt := make(chan os.Signal, 1)
-	k:=1
+	k:=2
 	chd := make(chan int)
+	head := http.Header{}
+	head.Add("Cookie", uuid.NewString())
+	// dialer := ws.Dialer{
+	// 	Timeout: time.Duration(100),
+	// 	WriteBufferSize: 1024,
+	// 	ReadBufferSize: 1024,
+	// 	Header: ws.HandshakeHeaderHTTP{head},
+	// }
 	
 	for i := 0; i < 10000; i++ {
 		time.Sleep(time.Millisecond*time.Duration(k))
 		go func(i int) {
 			head := http.Header{}
 			head.Add("Cookie", uuid.NewString())
-			//head.Add("company_name", "test")
 			c, _, err := websocket.DefaultDialer.Dial("ws://host.docker.internal:8080/", head)
 			if err != nil {
 				log.Printf("format string %s", err)
@@ -85,16 +87,7 @@ func main() {
 			}
 			
 		}(i)
-		// if i>5000{
-		// 	k=10
-		// }else if (i>7000){
-		// 	k=12
-		// }
 	}
 	<-chd
-	// for {
-	// 	// var v interface{}
-	// 	// _ = websocket.ReadJSON(conn, v)
-	// 	// log.Println(v)
-	// }
 }
+

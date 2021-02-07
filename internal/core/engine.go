@@ -3,6 +3,7 @@ package core
 import (
 	"errors"
 	"fmt"
+	"time"
 
 	//"sync"
 
@@ -57,6 +58,7 @@ func (e *Engine) HandleRead(c *Client) ([]byte, bool, error) {
 	return payload, isControl, err
 }
 func (e *Engine) Handle(conn net.Conn) {
+	start:=time.Now()
 	var userId, companyName string
 	companyName = "test"
 	u := ws.Upgrader{
@@ -96,8 +98,8 @@ func (e *Engine) Handle(conn net.Conn) {
 		ws.RejectConnectionError(ws.RejectionReason("user already exists"), ws.RejectionStatus(400))
 		return
 	}
-	e.Logger.Printf("User with id={%s} connected\n", client.UserId)
-
+	//e.Logger.Printf("User with id={%s} connected\n", client.UserId)
+	e.Logger.Printf("TAKEN TIME = {%s}", time.Since(start))
 	readDescriptor := netpoll.Must(netpoll.HandleReadOnce(conn))
 
 

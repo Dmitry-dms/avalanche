@@ -11,5 +11,6 @@ require (
 	github.com/mailru/easygo v0.0.0-20190618140210-3c14a0dc985f
 	github.com/panjf2000/ants v1.3.0
 	github.com/panjf2000/ants/v2 v2.4.3
+	github.com/posener/wstest v1.2.0
 	golang.org/x/sys v0.0.0-20210124154548-22da62e12c0c // indirect
 )

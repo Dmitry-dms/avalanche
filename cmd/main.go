@@ -4,13 +4,9 @@ import (
 	"context"
 	"fmt"
 	"net"
-
 	"runtime"
-
 	"log"
-
 	"net/http"
-	//"net/http/pprof"
 	"net/http/pprof"
 	"os"
 	"time"
@@ -18,17 +14,14 @@ import (
 	"github.com/Dmitry-dms/avalanche/internal/core"
 	"github.com/Dmitry-dms/avalanche/pkg/websocket"
 	"github.com/panjf2000/ants/v2"
-
 	"github.com/mailru/easygo/netpoll"
-	//"github.com/panjf2000/ants/v2"
-	//"github.com/pyroscope-io/pyroscope/pkg/agent/profiler"
 )
 
 var (
 	s     = new(http.Server)
 	serve = make(chan error, 1)
 	sig   = make(chan os.Signal, 1)
-	addr  = ":8080"
+	addr  = ":8040"
 )
 
 func printMemUsage() {
@@ -46,7 +39,8 @@ func bToMb(b uint64) uint64 {
 	return b / 1024 / 1024
 }
 func main() {
-	runtime.GOMAXPROCS(2)
+	//runtime.GOMAXPROCS(4)
+	
 	go func() {
 		for {
 			time.Sleep(10 * time.Second)
@@ -74,7 +68,8 @@ func main() {
 	}
 
 	//pool := websocket.NewPool(1000, 1000, 1000)
-	pool, _ := ants.NewPool(100000)
+	pool, _ := ants.NewPool(10000, ants.WithPreAlloc(true))
+	defer pool.Release()
 	engine := core.NewEngine(config, infoLog, cache, ln, pool, poller)
 
 	//ticker := time.NewTicker(time.Second * 60)
