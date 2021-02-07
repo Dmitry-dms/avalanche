@@ -4,8 +4,6 @@ import (
 	//"fmt"
 	"context"
 
-
-
 	"io/ioutil"
 	"net"
 	"sync"
@@ -84,18 +82,23 @@ func (t *CustomWebsocketTransport) Read() ([]byte, bool, error) {
 	return data, false, nil
 }
 
-func (t *CustomWebsocketTransport) Write(ch <-chan string) error {
+func (t *CustomWebsocketTransport) Write(msg []byte) error {
+	messageType := ws.OpText
+	if err := wsutil.WriteServerMessage(t.conn, messageType, msg); err != nil {
+		return err
+	}
+	return nil
 	//for {
-		select {
-		case <-t.closeCh:
-				return nil
-		case msg := <-ch:
-			messageType := ws.OpText
-			if err := wsutil.WriteServerMessage(t.conn, messageType, []byte(msg)); err != nil {
-				return err
-			}
-			return nil
-		}
+	// select {
+	// case <-t.closeCh:
+	// 		return nil
+	// case msg := <-ch:
+	// 	messageType := ws.OpText
+	// 	if err := wsutil.WriteServerMessage(t.conn, messageType, []byte(msg)); err != nil {
+	// 		return err
+	// 	}
+	// 	return nil
+	// }
 	//}
 }
 

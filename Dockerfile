@@ -1,7 +1,7 @@
 # стадия сборки
 FROM golang:alpine AS build-env
 ADD . /src
-RUN cd /src && go build -o goapp ./test2/main.go
+RUN cd /src && go build -o goapp ./cmd/main.go
 
 # финальная стадия
 FROM alpine

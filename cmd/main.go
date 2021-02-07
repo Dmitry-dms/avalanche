@@ -3,17 +3,24 @@ package main
 import (
 	"context"
 	"fmt"
+	"net"
+
 	"runtime"
 
 	"log"
-	"net"
+
 	"net/http"
-	_ "net/http/pprof"
+	//"net/http/pprof"
+	"net/http/pprof"
 	"os"
 	"time"
 
 	"github.com/Dmitry-dms/avalanche/internal/core"
 	"github.com/Dmitry-dms/avalanche/pkg/websocket"
+	"github.com/panjf2000/ants/v2"
+
+	"github.com/mailru/easygo/netpoll"
+	//"github.com/panjf2000/ants/v2"
 	//"github.com/pyroscope-io/pyroscope/pkg/agent/profiler"
 )
 
@@ -55,17 +62,21 @@ func main() {
 		Version:        "1",
 		MaxConnections: 100000,
 	}
-	
+	poller, err := netpoll.New(nil)
+	if err != nil {
+		log.Fatalf("error create netpoll: %s",err.Error())
+	}
 	infoLog := log.New(os.Stdout, "INFO\t", log.Ldate|log.Ltime)
 	cache := core.NewRamCache()
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		log.Fatalf("listen %q error: %v", addr, err)
 	}
-	
-	pool := websocket.NewPool(10, 1, 1)
-	engine := core.NewEngine(config, infoLog, cache, ln, pool)
-	
+
+	//pool := websocket.NewPool(1000, 1000, 1000)
+	pool, _ := ants.NewPool(100000)
+	engine := core.NewEngine(config, infoLog, cache, ln, pool, poller)
+
 	//ticker := time.NewTicker(time.Second * 60)
 	// go func() {
 	// 	for range ticker.C {
@@ -74,20 +85,79 @@ func main() {
 	// }()
 	engine.Subs.AddCompany("test", 100000)
 
-	http.HandleFunc("/ws", engine.SubscribeClient)       // Header: "user-id":....
-	http.HandleFunc("/ws-send", engine.SendToClientById) // Header: "user-id","company-name","payload"
-	http.HandleFunc("/a", engine.GetActiveUsers)
+	//http.HandleFunc("/ws", engine.Handle(conn net.Conn))       // Header: "user-id":....
+	//http.HandleFunc("/ws-send", engine.SendToClientById) // Header: "user-id","company-name","payload"
+	//http.HandleFunc("/a", engine.GetActiveUsers)
 	//ln, err := net.Listen("tcp", addr)
 
 	log.Printf("listening %s (%q)", ln.Addr(), addr)
 
+	acceptDesc := netpoll.Must(netpoll.HandleListener(ln, netpoll.EventRead|netpoll.EventOneShot))
+	accept := make(chan error, 1)
+	// Subscribe to events about listener.
+	_ = poller.Start(acceptDesc, func(e netpoll.Event) {
+		// We do not want to accept incoming connection when goroutine pool is
+		// busy. So if there are no free goroutines during 1ms we want to
+		// cooldown the server and do not receive connection for some short
+		// time.
+
+		err := pool.Submit(func() {
+			conn, err := ln.Accept()
+			if err != nil {
+				log.Printf("format string :%s", err)
+				accept <- err
+				return
+			}
+
+			accept <- nil
+			engine.Handle(conn)
+		})
+		//engine.Logger.Printf("error from submit in main: %s", err.Error())
+		if err == nil {
+			err = <-accept
+		}
+		if err != nil {
+			if err != websocket.ErrScheduleTimeout {
+				goto cooldown
+			}
+			if ne, ok := err.(net.Error); ok && ne.Temporary() {
+				goto cooldown
+			}
+
+			log.Fatalf("accept error: %v", err)
+
+		cooldown:
+			delay := 5 * time.Millisecond
+			log.Printf("accept error: %v; retrying in %s", err, delay)
+			time.Sleep(delay)
+		}
+
+		_ = poller.Resume(acceptDesc)
+	})
+	//sh := make(chan string)
 	go func() {
-		serve <- s.Serve(ln)
+		mux := http.NewServeMux()
+		mux.HandleFunc("/p", func(w http.ResponseWriter, r *http.Request) {
+			pprof.Index(w, r)
+		})
+		mux.HandleFunc("/ws-send", engine.SendToClientById)
+		mux.Handle("/heap", pprof.Handler("heap"))
+		mux.Handle("/allocs", pprof.Handler("allocs"))
+		mux.Handle("/goroutine", pprof.Handler("goroutine"))
+		mux.HandleFunc("/a", engine.GetActiveUsers)
+		log.Printf("run http server on :8090")
+		if err := http.ListenAndServe(":8090", mux); err != nil {
+			log.Fatalf("error start listen 8090: %s",err.Error())
+		}
 	}()
+	//<-sh
+	// go func() {
+	// 	serve <- s.Serve(ln)
+	// }()
 
 	select {
 	case err := <-serve:
-		log.Fatal(err)
+		log.Fatalf("error serve: %s",err.Error())
 	case sig := <-sig:
 		const timeout = 5 * time.Second
 		log.Printf("signal %q received; shutting down with %s timeout", sig, timeout)

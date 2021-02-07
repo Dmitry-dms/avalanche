@@ -36,8 +36,8 @@ func NewPool(size, queue, spawn int) *Pool {
 	return p
 }
 
-// Schedule schedules task to be executed over pool's workers.
-func (p *Pool) Schedule(task func()) {
+// Submit schedules task to be executed over pool's workers.
+func (p *Pool) Submit(task func()) {
 	p.schedule(task, nil)
 }
 
