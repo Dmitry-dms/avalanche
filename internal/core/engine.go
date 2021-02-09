@@ -1,6 +1,7 @@
 package core
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"time"
@@ -11,7 +12,9 @@ import (
 	"net"
 	"net/http"
 
+	"github.com/Dmitry-dms/avalanche/pkg/serializer"
 	"github.com/Dmitry-dms/avalanche/pkg/websocket"
+	"github.com/go-redis/redis/v8"
 	"github.com/mailru/easygo/netpoll"
 	"github.com/panjf2000/ants/v2"
 
@@ -20,23 +23,62 @@ import (
 )
 
 type Engine struct {
-	Conf   Config
-	Logger *log.Logger
-	Subs   AvalacnheCache
-	Server net.Listener
-	Pool   *ants.Pool
-	Poller netpoll.Poller
+	Conf       Config
+	Logger     *log.Logger
+	Subs       AvalacnheCache
+	Server     net.Listener
+	Pool       *ants.Pool
+	Poller     netpoll.Poller
+	RedisSub   *redis.PubSub
+	Serializer serializer.AvalancheSerializer
 }
 
-func NewEngine(config Config, logger *log.Logger, cache AvalacnheCache, conn net.Listener, pool *ants.Pool, poller netpoll.Poller) *Engine {
-	return &Engine{
-		Conf:   config,
-		Logger: logger,
-		Subs:   cache,
-		Server: conn,
-		Pool:   pool,
-		Poller: poller,
+func NewEngine(config Config, logger *log.Logger, cache AvalacnheCache, conn net.Listener, pool *ants.Pool, poller netpoll.Poller, s serializer.AvalancheSerializer) *Engine {
+	red := initRedis(config.RedisAddress)
+	ps := red.Subscribe(context.Background(), config.Name)
+	engine := &Engine{
+		Conf:       config,
+		Logger:     logger,
+		Subs:       cache,
+		Server:     conn,
+		Pool:       pool,
+		Poller:     poller,
+		RedisSub:   ps,
+		Serializer: s,
 	}
+	go engine.startRedisListen()
+	return engine
+}
+
+type redisMessage struct {
+	companyName string
+	clientId    string
+	message     string
+}
+
+func (e *Engine) startRedisListen() {
+	for msg := range e.RedisSub.Channel() {
+		_ = e.Pool.Submit(func() {
+			var m redisMessage
+			err := e.Serializer.Deserialize([]byte(msg.Payload), &m)
+			if err != nil {
+				return // TODO: Handle error
+			}
+			client, isOnline := e.Subs.GetClient(m.companyName, m.clientId)
+			if !isOnline {
+				return // TODO: Handle error
+			}
+			client.MessageChan <- m.message
+		})
+	}
+}
+func initRedis(address string) *redis.Client {
+	r := redis.NewClient(&redis.Options{
+		Addr:     address,
+		Password: "",
+		DB:       0,
+	})
+	return r
 }
 
 func (c *Client) HandleWrite(msg []byte) error {
@@ -58,7 +100,7 @@ func (e *Engine) HandleRead(c *Client) ([]byte, bool, error) {
 	return payload, isControl, err
 }
 func (e *Engine) Handle(conn net.Conn) {
-	start:=time.Now()
+	start := time.Now()
 	var userId, companyName string
 	companyName = "test"
 	u := ws.Upgrader{
@@ -95,13 +137,12 @@ func (e *Engine) Handle(conn net.Conn) {
 	err, deleteFn := e.Subs.AddClient(companyName, client)
 	if err != nil {
 		e.Logger.Println(err)
-		ws.RejectConnectionError(ws.RejectionReason("user already exists"), ws.RejectionStatus(400))
+		_ = ws.RejectConnectionError(ws.RejectionReason("user already exists"), ws.RejectionStatus(400))
 		return
 	}
 	//e.Logger.Printf("User with id={%s} connected\n", client.UserId)
 	e.Logger.Printf("TAKEN TIME = {%s}", time.Since(start))
 	readDescriptor := netpoll.Must(netpoll.HandleReadOnce(conn))
-
 
 	_ = e.Poller.Start(readDescriptor, func(ev netpoll.Event) {
 
@@ -113,7 +154,7 @@ func (e *Engine) Handle(conn net.Conn) {
 			e.Logger.Println("read poller error")
 			return
 		}
-		e.Pool.Submit(func() {
+		_ = e.Pool.Submit(func() {
 			if payload, isControl, err := e.HandleRead(client); err != nil {
 				_ = e.Poller.Stop(readDescriptor)
 				e.Logger.Printf("User with id={%s} was disconnected\n", client.UserId)
@@ -131,7 +172,7 @@ func (e *Engine) Handle(conn net.Conn) {
 
 	go func() {
 		for {
-			select{
+			select {
 			case <-client.Connection.CloseCh():
 				_ = deleteFn()
 				return
@@ -146,17 +187,19 @@ func (e *Engine) Handle(conn net.Conn) {
 						e.Logger.Printf("Meesage was send to user={%s}\n", client.UserId)
 					}
 				})
-				if err!= nil {
+				if err != nil {
 					e.Logger.Printf("Error from read shedule^ %s", err.Error())
 				}
 			}
-			
+
 		}
 	}()
 }
 
 func (e *Engine) GetActiveUsers(w http.ResponseWriter, r *http.Request) {
-	e.Logger.Println(w.Write([]byte(fmt.Sprintf("%d", e.Subs.GetActiveUsers()))))
+	users := e.Subs.GetActiveUsers()
+	_, _ = w.Write([]byte(fmt.Sprintf("%d", users)))
+	e.Logger.Printf("Active users = %d", users)
 }
 func (e *Engine) SendToClientById(w http.ResponseWriter, r *http.Request) {
 	userId := "0"         //r.Header.Get("user-id")

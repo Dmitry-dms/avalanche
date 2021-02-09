@@ -4,9 +4,11 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"sync"
 	"time"
 
-//	"github.com/gobwas/ws"
+	//"github.com/gobwas/ws"
+
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 )
@@ -15,21 +17,21 @@ func main() {
 	interrupt := make(chan os.Signal, 1)
 	k:=2
 	chd := make(chan int)
-	head := http.Header{}
-	head.Add("Cookie", uuid.NewString())
 	// dialer := ws.Dialer{
 	// 	Timeout: time.Duration(100),
 	// 	WriteBufferSize: 1024,
 	// 	ReadBufferSize: 1024,
-	// 	Header: ws.HandshakeHeaderHTTP{head},
 	// }
-	
 	for i := 0; i < 10000; i++ {
 		time.Sleep(time.Millisecond*time.Duration(k))
 		go func(i int) {
 			head := http.Header{}
 			head.Add("Cookie", uuid.NewString())
-			c, _, err := websocket.DefaultDialer.Dial("ws://host.docker.internal:8080/", head)
+			dialer := websocket.DefaultDialer
+			dialer.ReadBufferSize = 1024
+			dialer.HandshakeTimeout = time.Duration(1000*time.Second)
+			dialer.WriteBufferPool = &sync.Pool{}
+			c, _, err := dialer.Dial("ws://178.62.52.60:8040/", head)
 			if err != nil {
 				log.Printf("format string %s", err)
 				//c.Close()

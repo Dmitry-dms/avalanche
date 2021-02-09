@@ -3,18 +3,19 @@ package main
 import (
 	"context"
 	"fmt"
-	"net"
-	"runtime"
 	"log"
+	"net"
 	"net/http"
 	"net/http/pprof"
 	"os"
+	"runtime"
 	"time"
 
 	"github.com/Dmitry-dms/avalanche/internal/core"
+	"github.com/Dmitry-dms/avalanche/pkg/serializer/json"
 	"github.com/Dmitry-dms/avalanche/pkg/websocket"
-	"github.com/panjf2000/ants/v2"
 	"github.com/mailru/easygo/netpoll"
+	"github.com/panjf2000/ants/v2"
 )
 
 var (
@@ -55,6 +56,7 @@ func main() {
 		Name:           "ws-1",
 		Version:        "1",
 		MaxConnections: 100000,
+		RedisAddress: "localhost:6546",
 	}
 	poller, err := netpoll.New(nil)
 	if err != nil {
@@ -70,7 +72,8 @@ func main() {
 	//pool := websocket.NewPool(1000, 1000, 1000)
 	pool, _ := ants.NewPool(10000, ants.WithPreAlloc(true))
 	defer pool.Release()
-	engine := core.NewEngine(config, infoLog, cache, ln, pool, poller)
+	jsonSerializer := &json.CustomJsonSerializer{}
+	engine := core.NewEngine(config, infoLog, cache, ln, pool, poller, jsonSerializer)
 
 	//ticker := time.NewTicker(time.Second * 60)
 	// go func() {

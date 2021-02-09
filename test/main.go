@@ -3,12 +3,11 @@ package main
 import (
 
 	//	"fmt"
-	"fmt"
+	"encoding/json"
+
 	"log"
 	"net/http"
 	"sync"
-
-
 	//"github.com/Dmitry-dms/avalanche/internal/core"
 	//"github.com/Dmitry-dms/avalanche/pkg/websocket"
 )
@@ -32,13 +31,15 @@ func main() {
 	// 	fmt.Println(err)
 	// }
 	//fmt.Println(cache.GetCompany("test").GetUsers())
-	var wg sync.WaitGroup
-	for i := 0; i < 1000; i++ {
-		wg.Add(1)
-		//k:=1
-		go requests(fmt.Sprintf("user-%d",i), fmt.Sprintf("Hello to user-%d", i), &wg)
-	}
-	wg.Wait()
+	// var wg sync.WaitGroup
+	// for i := 0; i < 1000; i++ {
+	// 	wg.Add(1)
+	// 	//k:=1
+	// 	go requests(fmt.Sprintf("user-%d",i), fmt.Sprintf("Hello to user-%d", i), &wg)
+	// }
+	// wg.Wait()
+	enc()
+	
 }
 func requests(id, payload string, wg *sync.WaitGroup) {
 	
@@ -57,4 +58,19 @@ func requests(id, payload string, wg *sync.WaitGroup) {
 		log.Printf("error from do: %s", err)
 	}
 	wg.Done()
+}
+type Client struct {
+	Company string
+	Id string
+}
+func enc(){
+	cl := Client{"luksemburg","3545-3433423-fdf-3423"}
+	msg, err := json.Marshal(cl)
+	if err != nil{
+		log.Fatal(err)
+	}
+	log.Println(msg)
+	var c2 Client
+	json.Unmarshal(msg, &c2)
+	log.Println(c2.Id)
 }
