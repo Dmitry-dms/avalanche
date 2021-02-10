@@ -46,29 +46,36 @@ func NewEngine(config Config, logger *log.Logger, cache AvalacnheCache, conn net
 		RedisSub:   ps,
 		Serializer: s,
 	}
+	if err := red.Ping(red.Context()).Err(); err != nil {
+		engine.Logger.Println(err)
+	}
 	go engine.startRedisListen()
 	return engine
 }
 
 type redisMessage struct {
-	companyName string
-	clientId    string
-	message     string
+	CompanyName string
+	ClientId    string
+	Message     string
 }
 
 func (e *Engine) startRedisListen() {
+	e.Logger.Println("listener was started")
 	for msg := range e.RedisSub.Channel() {
 		_ = e.Pool.Submit(func() {
 			var m redisMessage
 			err := e.Serializer.Deserialize([]byte(msg.Payload), &m)
 			if err != nil {
+				e.Logger.Println(err)
 				return // TODO: Handle error
 			}
-			client, isOnline := e.Subs.GetClient(m.companyName, m.clientId)
+			client, isOnline := e.Subs.GetClient(m.CompanyName, m.ClientId)
 			if !isOnline {
+				e.Logger.Println(err)
 				return // TODO: Handle error
 			}
-			client.MessageChan <- m.message
+			e.Logger.Printf("Message {%s} to client {%s} with company id {%s}", m.Message, m.ClientId, m.CompanyName)
+			client.MessageChan <- m.Message
 		})
 	}
 }
@@ -197,7 +204,7 @@ func (e *Engine) Handle(conn net.Conn) {
 }
 
 func (e *Engine) GetActiveUsers(w http.ResponseWriter, r *http.Request) {
-	users := e.Subs.GetActiveUsers()
+	users, _ := e.Subs.GetActiveUsers("test")
 	_, _ = w.Write([]byte(fmt.Sprintf("%d", users)))
 	e.Logger.Printf("Active users = %d", users)
 }

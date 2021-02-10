@@ -6,27 +6,32 @@ import (
 	"sync/atomic"
 )
 
+var (
+	userExists  = "client already exists"
+	limitUsers  = "reached the limit of max active users"
+	userDExists = "client doesn't exists"
+)
 
 type ClientHub struct {
-	mu    sync.RWMutex
-	Users map[string]*Client
+	mu          sync.RWMutex
+	Users       map[string]*Client
 	activeUsers *uint64
-	maxUsers uint
+	maxUsers    uint
 }
 
 func newClientHub(maxUsers uint) *ClientHub {
 	return &ClientHub{
-		Users: make(map[string]*Client),
+		Users:       make(map[string]*Client),
 		activeUsers: new(uint64),
-		maxUsers: maxUsers,
+		maxUsers:    maxUsers,
 	}
 }
 func (c *ClientHub) AddClient(client *Client) error {
 	if ok := c.verifyClient(client.UserId); ok {
-		return errors.New("client already exists")
+		return errors.New(userExists)
 	}
-	if c.GetNumActiveUsers() >= uint64(c.maxUsers){
-		return errors.New("reached limit of max active users")
+	if c.GetNumActiveUsers() >= uint64(c.maxUsers) {
+		return errors.New(limitUsers)
 	}
 	c.mu.Lock()
 	c.Users[client.UserId] = client
@@ -42,10 +47,10 @@ func (c *ClientHub) verifyClient(userId string) bool {
 }
 func (c *ClientHub) DeleteClient(userId string) error {
 	if ok := c.verifyClient(userId); !ok {
-		return errors.New("client doesn't exists")
+		return errors.New(userDExists)
 	}
 	c.mu.Lock()
-	delete(c.Users,userId)
+	delete(c.Users, userId)
 	c.mu.Unlock()
 	atomic.AddUint64(c.activeUsers, ^uint64(0))
 	return nil
@@ -56,8 +61,8 @@ func (c *ClientHub) GetNumActiveUsers() uint64 {
 func (c *ClientHub) GetUsers() []*Client {
 	var cl []*Client
 	c.mu.RLock()
-	for _,client := range c.Users{
-		cl = append(cl,client)
+	for _, client := range c.Users {
+		cl = append(cl, client)
 	}
 	c.mu.RUnlock()
 	return cl

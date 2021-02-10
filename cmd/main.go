@@ -13,7 +13,6 @@ import (
 
 	"github.com/Dmitry-dms/avalanche/internal/core"
 	"github.com/Dmitry-dms/avalanche/pkg/serializer/json"
-	"github.com/Dmitry-dms/avalanche/pkg/websocket"
 	"github.com/mailru/easygo/netpoll"
 	"github.com/panjf2000/ants/v2"
 )
@@ -22,7 +21,7 @@ var (
 	s     = new(http.Server)
 	serve = make(chan error, 1)
 	sig   = make(chan os.Signal, 1)
-	addr  = ":8040"
+	addr  = ":8080"
 )
 
 func printMemUsage() {
@@ -56,7 +55,7 @@ func main() {
 		Name:           "ws-1",
 		Version:        "1",
 		MaxConnections: 100000,
-		RedisAddress: "localhost:6546",
+		RedisAddress: "host.docker.internal:6560",
 	}
 	poller, err := netpoll.New(nil)
 	if err != nil {
@@ -69,7 +68,7 @@ func main() {
 		log.Fatalf("listen %q error: %v", addr, err)
 	}
 
-	//pool := websocket.NewPool(1000, 1000, 1000)
+
 	pool, _ := ants.NewPool(10000, ants.WithPreAlloc(true))
 	defer pool.Release()
 	jsonSerializer := &json.CustomJsonSerializer{}
@@ -83,16 +82,13 @@ func main() {
 	// }()
 	engine.Subs.AddCompany("test", 100000)
 
-	//http.HandleFunc("/ws", engine.Handle(conn net.Conn))       // Header: "user-id":....
-	//http.HandleFunc("/ws-send", engine.SendToClientById) // Header: "user-id","company-name","payload"
-	//http.HandleFunc("/a", engine.GetActiveUsers)
-	//ln, err := net.Listen("tcp", addr)
+
 
 	log.Printf("listening %s (%q)", ln.Addr(), addr)
 
 	acceptDesc := netpoll.Must(netpoll.HandleListener(ln, netpoll.EventRead|netpoll.EventOneShot))
 	accept := make(chan error, 1)
-	// Subscribe to events about listener.
+
 	_ = poller.Start(acceptDesc, func(e netpoll.Event) {
 		// We do not want to accept incoming connection when goroutine pool is
 		// busy. So if there are no free goroutines during 1ms we want to
@@ -110,14 +106,10 @@ func main() {
 			accept <- nil
 			engine.Handle(conn)
 		})
-		//engine.Logger.Printf("error from submit in main: %s", err.Error())
 		if err == nil {
 			err = <-accept
 		}
 		if err != nil {
-			if err != websocket.ErrScheduleTimeout {
-				goto cooldown
-			}
 			if ne, ok := err.(net.Error); ok && ne.Temporary() {
 				goto cooldown
 			}
@@ -132,7 +124,7 @@ func main() {
 
 		_ = poller.Resume(acceptDesc)
 	})
-	//sh := make(chan string)
+
 	go func() {
 		mux := http.NewServeMux()
 		mux.HandleFunc("/p", func(w http.ResponseWriter, r *http.Request) {
@@ -148,10 +140,6 @@ func main() {
 			log.Fatalf("error start listen 8090: %s",err.Error())
 		}
 	}()
-	//<-sh
-	// go func() {
-	// 	serve <- s.Serve(ln)
-	// }()
 
 	select {
 	case err := <-serve:
@@ -165,5 +153,5 @@ func main() {
 			log.Fatal(err)
 		}
 	}
-	//log.Fatal(http.ListenAndServe(":8080", nil))
+
 }
