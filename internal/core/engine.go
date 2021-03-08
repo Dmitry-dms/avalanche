@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/http"
 
+	"github.com/Dmitry-dms/avalanche/pkg/auth"
 	"github.com/Dmitry-dms/avalanche/pkg/serializer"
 	"github.com/Dmitry-dms/avalanche/pkg/websocket"
 	"github.com/go-redis/redis/v8"
@@ -23,45 +24,140 @@ import (
 )
 
 type Engine struct {
-	Conf       Config
-	Logger     *log.Logger
-	Subs       AvalacnheCache
-	Server     net.Listener
-	Pool       *ants.Pool
-	Poller     netpoll.Poller
-	RedisSub   *redis.PubSub
-	Serializer serializer.AvalancheSerializer
+	Conf             Config
+	Logger           *log.Logger
+	Subs             Cache
+	Server           net.Listener
+	Pool             *ants.Pool
+	Poller           netpoll.Poller
+	RedisMsgSub      *redis.PubSub
+	RedisSendInfo    func(payload []byte) error
+	RedisAddCompany  func(company addCompanyResponse) error
+	RedisCommandsSub *redis.PubSub
+	Serializer       serializer.AvalancheSerializer
+	AuthManager      *auth.Manager
 }
 
-func NewEngine(config Config, logger *log.Logger, cache AvalacnheCache, conn net.Listener, pool *ants.Pool, poller netpoll.Poller, s serializer.AvalancheSerializer) *Engine {
+func NewEngine(config Config, logger *log.Logger, cache Cache,
+	conn net.Listener, pool *ants.Pool,
+	poller netpoll.Poller, s serializer.AvalancheSerializer) (*Engine, error) {
 	red := initRedis(config.RedisAddress)
-	ps := red.Subscribe(context.Background(), config.Name)
+	redisMsg := red.Subscribe(context.Background(), config.RedisMsgPrefix+config.Name)
+	redisInfo := func(payload []byte) error {
+		return red.Publish(context.Background(), config.RedisInfoPrefix+config.Name, payload).Err()
+	}
+	redisAddCompany := func(company addCompanyResponse) error {
+		return red.Append(context.Background(), company.companyName, company.toString()).Err()
+	}
+	redisMain := red.Subscribe(context.Background(), config.RedisCommandsPrefix+config.Name)
+	authManager, err := auth.NewManager(config.AuthJWTkey)
+	if err == nil {
+		return nil, err
+	}
 	engine := &Engine{
-		Conf:       config,
-		Logger:     logger,
-		Subs:       cache,
-		Server:     conn,
-		Pool:       pool,
-		Poller:     poller,
-		RedisSub:   ps,
-		Serializer: s,
+		Conf:             config,
+		Logger:           logger,
+		Subs:             cache,
+		Server:           conn,
+		Pool:             pool,
+		Poller:           poller,
+		RedisMsgSub:      redisMsg,
+		RedisSendInfo:    redisInfo,
+		RedisCommandsSub: redisMain,
+		RedisAddCompany:  redisAddCompany,
+		Serializer:       s,
+		AuthManager:      authManager,
 	}
 	if err := red.Ping(red.Context()).Err(); err != nil {
 		engine.Logger.Println(err)
 	}
 	go engine.startRedisListen()
-	return engine
+	go engine.sendStatisticAboutUsers()
+	go engine.listeningCommands()
+	return engine, nil
 }
 
 type redisMessage struct {
-	CompanyName string
+	companyName string
 	ClientId    string
 	Message     string
 }
+type addCompanyMessage struct {
+	CompanyName string
+	MaxUsers    uint
+	Duration    int
+}
+type companyToken struct {
+	Token      string
+	ServerName string
+	Duration   int
+}
+type addCompanyResponse struct {
+	token       companyToken
+	companyName string
+}
 
+func (r *addCompanyResponse) toString() string {
+	return fmt.Sprintf("%s:%s", r.token.ServerName, r.token.Token)
+}
+func (e *Engine) listeningCommands() {
+	for s := range e.RedisCommandsSub.Channel() {
+		_ = e.Pool.Submit(func() {
+			var c addCompanyMessage
+			err := e.Serializer.Deserialize([]byte(s.Payload), c)
+			if err != nil {
+				e.Logger.Println(err)
+				return
+			}
+			token, err := e.AuthManager.NewJWT(c.CompanyName, time.Duration(c.Duration))
+			if err != nil {
+				e.Logger.Println(err)
+				return
+			}
+			err = e.Subs.AddCompany(c.CompanyName, token, c.MaxUsers, time.Duration(c.Duration))
+			if err != nil {
+				e.Logger.Println(err)
+				return
+			}
+			err = e.RedisAddCompany(addCompanyResponse{
+				companyName: c.CompanyName,
+				token: companyToken{
+					ServerName: e.Conf.Name,
+					Token:      token,
+				},
+			})
+			if err != nil {
+				e.Logger.Println(err)
+				return
+			}
+		})
+	}
+}
+func (e *Engine) sendStatisticAboutUsers() {
+	ticker := time.NewTicker(time.Second * 10)
+	defer ticker.Stop()
+	for range ticker.C {
+		_ = e.Pool.Submit(func() {
+			companies := e.Subs.GetStatisctics()
+			if companies == nil {
+				return
+			}
+			serialized, err := e.Serializer.Serialize(companies)
+			if err != nil {
+				e.Logger.Println(err)
+				return
+			}
+			err = e.RedisSendInfo(serialized)
+			if err != nil {
+				e.Logger.Println(err)
+				return
+			}
+		})
+	}
+}
 func (e *Engine) startRedisListen() {
 	e.Logger.Println("listener was started")
-	for msg := range e.RedisSub.Channel() {
+	for msg := range e.RedisMsgSub.Channel() {
 		_ = e.Pool.Submit(func() {
 			var m redisMessage
 			err := e.Serializer.Deserialize([]byte(msg.Payload), &m)
@@ -69,12 +165,12 @@ func (e *Engine) startRedisListen() {
 				e.Logger.Println(err)
 				return // TODO: Handle error
 			}
-			client, isOnline := e.Subs.GetClient(m.CompanyName, m.ClientId)
+			client, isOnline := e.Subs.GetClient(m.companyName, m.ClientId)
 			if !isOnline {
 				e.Logger.Println(err)
 				return // TODO: Handle error
 			}
-			e.Logger.Printf("Message {%s} to client {%s} with company id {%s}", m.Message, m.ClientId, m.CompanyName)
+			e.Logger.Printf("Message {%s} to client {%s} with company id {%s}", m.Message, m.ClientId, m.companyName)
 			client.MessageChan <- m.Message
 		})
 	}
@@ -109,10 +205,10 @@ func (e *Engine) HandleRead(c *Client) ([]byte, bool, error) {
 func (e *Engine) Handle(conn net.Conn) {
 	start := time.Now()
 	var userId, companyName string
-	companyName = "test"
+	//companyName = "test"
 	u := ws.Upgrader{
-		ReadBufferSize:  1024,
-		WriteBufferSize: 512,
+		ReadBufferSize:  256,
+		WriteBufferSize: 1024,
 		OnHeader: func(key, value []byte) error {
 			if string(key) != "Cookie" {
 				return nil
@@ -129,6 +225,14 @@ func (e *Engine) Handle(conn net.Conn) {
 				ws.RejectionStatus(400),
 			)
 
+		}, Extension: func(op httphead.Option) bool {
+			token, ok := op.Parameters.Get("token")
+			err := errors.New("")
+			companyName, err = e.AuthManager.Parse(string(token))
+			if err != nil {
+				return !ok
+			}
+			return ok
 		},
 	}
 	// Zero-copy upgrade to WebSocket connection.

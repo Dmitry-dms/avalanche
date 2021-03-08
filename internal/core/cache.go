@@ -3,17 +3,19 @@ package core
 import (
 	"errors"
 	"sync"
+	"time"
 )
 
 type deleteClientFn func() error
 
-type AvalacnheCache interface {
-	AddCompany(companyName string, maxUsers uint) error
+type Cache interface {
+	AddCompany(companyName, token string, maxUsers uint, ttl time.Duration) error
 	GetCompany(companyName string) (*ClientHub, error)
 	DeleteCompany(companyName string)
 	AddClient(companyName string, client *Client) (error, deleteClientFn)
 	GetClient(companyName, clientId string) (*Client, bool)
 	GetActiveUsers(companyName string) (uint, error)
+	GetStatisctics() []CompanyStats
 }
 
 var (
@@ -28,16 +30,37 @@ type RamCache struct {
 
 func NewRamCache() *RamCache {
 	return &RamCache{
-		users: make(map[string]*ClientHub),
+		users: make(map[string]*ClientHub,20),
 	}
 }
-func (r *RamCache) AddCompany(companyName string, maxUsers uint) error {
+
+type CompanyStats struct {
+	OnlineUsers uint
+	MaxUsers    uint
+}
+
+func (r *RamCache) GetStatisctics() []CompanyStats {
+	r.mu.RLock()
+	var stats []CompanyStats
+	for _, company := range r.users {
+		stats = append(stats, CompanyStats{
+			MaxUsers:    company.maxUsers,
+			OnlineUsers: uint(company.GetNumActiveUsers()),
+		})
+	}
+	r.mu.RUnlock()
+	if len(stats) == 0 {
+		return nil
+	}
+	return stats
+}
+func (r *RamCache) AddCompany(companyName, token string, maxUsers uint, ttl time.Duration) error {
 	_, ok := r.getCompany(companyName)
 	if ok {
 		return errors.New(companyE)
 	}
 	r.mu.Lock()
-	r.users[companyName] = newClientHub(maxUsers)
+	r.users[companyName] = newClientHub(maxUsers, token, ttl)
 	r.mu.Unlock()
 	return nil
 }

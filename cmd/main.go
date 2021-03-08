@@ -40,7 +40,7 @@ func bToMb(b uint64) uint64 {
 }
 func main() {
 	//runtime.GOMAXPROCS(4)
-	
+
 	go func() {
 		for {
 			time.Sleep(10 * time.Second)
@@ -55,11 +55,11 @@ func main() {
 		Name:           "ws-1",
 		Version:        "1",
 		MaxConnections: 100000,
-		RedisAddress: "host.docker.internal:6560",
+		RedisAddress:   "host.docker.internal:6560",
 	}
 	poller, err := netpoll.New(nil)
 	if err != nil {
-		log.Fatalf("error create netpoll: %s",err.Error())
+		log.Fatalf("error create netpoll: %s", err.Error())
 	}
 	infoLog := log.New(os.Stdout, "INFO\t", log.Ldate|log.Ltime)
 	cache := core.NewRamCache()
@@ -67,7 +67,6 @@ func main() {
 	if err != nil {
 		log.Fatalf("listen %q error: %v", addr, err)
 	}
-
 
 	pool, _ := ants.NewPool(10000, ants.WithPreAlloc(true))
 	defer pool.Release()
@@ -81,8 +80,6 @@ func main() {
 	// 	}
 	// }()
 	engine.Subs.AddCompany("test", 100000)
-
-
 
 	log.Printf("listening %s (%q)", ln.Addr(), addr)
 
@@ -137,13 +134,13 @@ func main() {
 		mux.HandleFunc("/a", engine.GetActiveUsers)
 		log.Printf("run http server on :8090")
 		if err := http.ListenAndServe(":8090", mux); err != nil {
-			log.Fatalf("error start listen 8090: %s",err.Error())
+			log.Fatalf("error start listen 8090: %s", err.Error())
 		}
 	}()
 
 	select {
 	case err := <-serve:
-		log.Fatalf("error serve: %s",err.Error())
+		log.Fatalf("error serve: %s", err.Error())
 	case sig := <-sig:
 		const timeout = 5 * time.Second
 		log.Printf("signal %q received; shutting down with %s timeout", sig, timeout)

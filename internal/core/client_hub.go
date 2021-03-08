@@ -4,6 +4,7 @@ import (
 	"errors"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 var (
@@ -17,13 +18,17 @@ type ClientHub struct {
 	Users       map[string]*Client
 	activeUsers *uint64
 	maxUsers    uint
+	token       string
+	ttl         time.Duration
 }
 
-func newClientHub(maxUsers uint) *ClientHub {
+func newClientHub(maxUsers uint, token string, ttl time.Duration) *ClientHub {
 	return &ClientHub{
-		Users:       make(map[string]*Client),
+		Users:       make(map[string]*Client,100),
 		activeUsers: new(uint64),
 		maxUsers:    maxUsers,
+		token: token,
+		ttl: ttl,
 	}
 }
 func (c *ClientHub) AddClient(client *Client) error {
