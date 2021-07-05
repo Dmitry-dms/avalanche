@@ -14,7 +14,7 @@ type TokenManager interface {
 	//NewRefreshToken() (string, error)
 }
 type Manager struct {
-	key string
+	key string// TODO: add extra time to duration
 }
 type tokenClaims struct {
 	jwt.StandardClaims
@@ -32,6 +32,7 @@ func (m *Manager) NewJWT(companyId string, ttl time.Duration) (string, error) {
 		ExpiresAt: time.Now().Add(ttl).Unix(),
 		Subject:   companyId,
 	}, companyId})
+
 	return token.SignedString([]byte(m.key))
 }
 func (m *Manager) Parse(accessToken string) (string, error) {

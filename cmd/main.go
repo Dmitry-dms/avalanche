@@ -11,7 +11,7 @@ import (
 	"runtime"
 	"time"
 
-	"github.com/Dmitry-dms/avalanche/internal/core"
+	"github.com/Dmitry-dms/avalanche/internal"
 	"github.com/Dmitry-dms/avalanche/pkg/serializer/json"
 	"github.com/mailru/easygo/netpoll"
 	"github.com/panjf2000/ants/v2"
@@ -21,7 +21,8 @@ var (
 	s     = new(http.Server)
 	serve = make(chan error, 1)
 	sig   = make(chan os.Signal, 1)
-	addr  = ":8080"
+
+	addr = ":8080"
 )
 
 func printMemUsage() {
@@ -71,7 +72,7 @@ func main() {
 	pool, _ := ants.NewPool(10000, ants.WithPreAlloc(true))
 	defer pool.Release()
 	jsonSerializer := &json.CustomJsonSerializer{}
-	engine := core.NewEngine(config, infoLog, cache, ln, pool, poller, jsonSerializer)
+	engine, _ := core.NewEngine(config, infoLog, cache, ln, pool, poller, jsonSerializer)
 
 	//ticker := time.NewTicker(time.Second * 60)
 	// go func() {
@@ -79,7 +80,7 @@ func main() {
 	// 		engine.Subs.DeleteOfflineClients()
 	// 	}
 	// }()
-	engine.Subs.AddCompany("test", 100000)
+	engine.Subs.AddCompany("test", "1", 100000, time.Hour)
 
 	log.Printf("listening %s (%q)", ln.Addr(), addr)
 
