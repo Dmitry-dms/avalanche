@@ -1,4 +1,4 @@
-package core
+package internal
 
 type Config struct {
 	Name           string

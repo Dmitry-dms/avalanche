@@ -1,4 +1,4 @@
-package core
+package internal
 
 import (
 	"errors"
@@ -30,20 +30,26 @@ type RamCache struct {
 
 func NewRamCache() *RamCache {
 	return &RamCache{
-		users: make(map[string]*ClientHub,20),
+		users: make(map[string]*ClientHub, 20),
 	}
 }
 
 type CompanyStats struct {
-	OnlineUsers uint
-	MaxUsers    uint
+	OnlineUsers uint         `json:"online_users"`
+	MaxUsers    uint         `json:"max_users"`
+	Users       []ClientStat `json:"active_users"`
+}
+type ClientStat struct {
+	UserId string `json:"user_id"`
 }
 
 func (r *RamCache) GetStatisctics() []CompanyStats {
 	r.mu.RLock()
 	var stats []CompanyStats
 	for _, company := range r.users {
+		usersStat := company.GetActiveUsersId()
 		stats = append(stats, CompanyStats{
+			Users:       usersStat,
 			MaxUsers:    company.maxUsers,
 			OnlineUsers: uint(company.GetNumActiveUsers()),
 		})
@@ -83,27 +89,32 @@ func (r *RamCache) DeleteCompany(companyName string) {
 	r.mu.Unlock()
 }
 func (r *RamCache) AddClient(companyName string, client *Client) (error, deleteClientFn) {
-	r.mu.Lock()
-	err := r.users[companyName].AddClient(client)
-	r.mu.Unlock()
+	company, ok := r.getCompany(companyName)
+	if !ok {
+		return errors.New(companyDe), nil
+	}
+	err := company.addClient(client)
 	return err, func() error { return r.deleteClient(companyName, client.UserId) }
 }
 func (r *RamCache) deleteClient(companyName, clientId string) error {
-	r.mu.Lock()
-	err := r.users[companyName].DeleteClient(clientId)
-	r.mu.Unlock()
-	return err
+	company, ok := r.getCompany(companyName)
+	if !ok {
+		return errors.New(companyDe)
+	}
+	return company.deleteClient(clientId)
 }
 func (r *RamCache) GetClient(companyName, clientId string) (*Client, bool) {
-	r.mu.RLock()
-	client, ok := r.users[companyName].get(clientId)
-	r.mu.RUnlock()
+	company, ok := r.getCompany(companyName)
+	if !ok {
+		return nil, ok
+	}
+	client, ok := company.get(clientId)
 	return client, ok
 }
 func (r *RamCache) GetActiveUsers(companyName string) (uint, error) {
-	c, err := r.GetCompany(companyName)
-	if err != nil {
-		return 0, err
+	c, ok := r.getCompany(companyName)
+	if !ok {
+		return 0, errors.New(companyDe)
 	}
 	return uint(c.GetNumActiveUsers()), nil
 }

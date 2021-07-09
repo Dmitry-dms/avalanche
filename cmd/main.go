@@ -12,9 +12,9 @@ import (
 	"time"
 
 	"github.com/Dmitry-dms/avalanche/internal"
+	"github.com/Dmitry-dms/avalanche/pkg/pool"
 	"github.com/Dmitry-dms/avalanche/pkg/serializer/json"
 	"github.com/mailru/easygo/netpoll"
-	"github.com/panjf2000/ants/v2"
 )
 
 var (
@@ -52,27 +52,33 @@ func main() {
 	// 	ApplicationName: "avalanche",
 	// 	ServerAddress:   "http://host.docker.internal:4040",
 	// })
-	config := core.Config{
-		Name:           "ws-1",
-		Version:        "1",
-		MaxConnections: 100000,
-		RedisAddress:   "host.docker.internal:6560",
+	config := internal.Config{
+		Name:                "ws-1",
+		Version:             "1",
+		MaxConnections:      100000,
+		AuthJWTkey:          "token23",
+		RedisAddress:        "host.docker.internal:6560",
+		RedisCommandsPrefix: "comm",
+		RedisMsgPrefix:      "msg",
+		RedisInfoPrefix:     "info",
 	}
 	poller, err := netpoll.New(nil)
 	if err != nil {
 		log.Fatalf("error create netpoll: %s", err.Error())
 	}
 	infoLog := log.New(os.Stdout, "INFO\t", log.Ldate|log.Ltime)
-	cache := core.NewRamCache()
+	cache := internal.NewRamCache()
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		log.Fatalf("listen %q error: %v", addr, err)
 	}
 
-	pool, _ := ants.NewPool(10000, ants.WithPreAlloc(true))
-	defer pool.Release()
+	poolConnection := pool.NewPool(128, 20, 10)
+	poolCommands := pool.NewPool(50, 1, 20)
+
 	jsonSerializer := &json.CustomJsonSerializer{}
-	engine, _ := core.NewEngine(config, infoLog, cache, ln, pool, poller, jsonSerializer)
+	ctx := context.Background()
+	engine, _ := internal.NewEngine(ctx, config, infoLog, cache, ln, poolConnection, poolCommands, poller, jsonSerializer)
 
 	//ticker := time.NewTicker(time.Second * 60)
 	// go func() {
@@ -87,40 +93,40 @@ func main() {
 	acceptDesc := netpoll.Must(netpoll.HandleListener(ln, netpoll.EventRead|netpoll.EventOneShot))
 	accept := make(chan error, 1)
 
-	_ = poller.Start(acceptDesc, func(e netpoll.Event) {
-		// We do not want to accept incoming connection when goroutine pool is
-		// busy. So if there are no free goroutines during 1ms we want to
-		// cooldown the server and do not receive connection for some short
-		// time.
+	_ = engine.Poller.Start(acceptDesc, func(e netpoll.Event) {
+	// We do not want to accept incoming connection when goroutine pool is
+	// busy. So if there are no free goroutines during 1ms we want to
+	// cooldown the server and do not receive connection for some short
+	// time.
+	engine.PoolConnection.Schedule(func() {
+	conn, err := ln.Accept()
+	if err != nil {
+		log.Printf("format string :%s", err)
+		accept <- err
+		return
+	}
 
-		err := pool.Submit(func() {
-			conn, err := ln.Accept()
-			if err != nil {
-				log.Printf("format string :%s", err)
-				accept <- err
-				return
-			}
+	accept <- nil
+	go engine.Handle(conn)
+	})
+	if err == nil {
+		err = <-accept
+	}
+	if err != nil {
 
-			accept <- nil
-			engine.Handle(conn)
-		})
-		if err == nil {
-			err = <-accept
-		}
-		if err != nil {
-			if ne, ok := err.(net.Error); ok && ne.Temporary() {
-				goto cooldown
-			}
-
-			log.Fatalf("accept error: %v", err)
-
-		cooldown:
-			delay := 5 * time.Millisecond
-			log.Printf("accept error: %v; retrying in %s", err, delay)
-			time.Sleep(delay)
+		if ne, ok := err.(net.Error); ok && ne.Temporary() {
+			goto cooldown
 		}
 
-		_ = poller.Resume(acceptDesc)
+		log.Fatalf("accept error: %v", err)
+
+	cooldown:
+		delay := 5 * time.Millisecond
+		log.Printf("accept error: %v; retrying in %s", err, delay)
+		time.Sleep(delay)
+	}
+
+	_ = engine.Poller.Resume(acceptDesc)
 	})
 
 	go func() {

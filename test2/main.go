@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -9,7 +10,7 @@ import (
 
 	//"github.com/gobwas/ws"
 
-	"github.com/google/uuid"
+	//"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 )
 
@@ -22,16 +23,18 @@ func main() {
 	// 	WriteBufferSize: 1024,
 	// 	ReadBufferSize: 1024,
 	// }
+	token := "test"
 	for i := 0; i < 10000; i++ {
 		time.Sleep(time.Millisecond*time.Duration(k))
 		go func(i int) {
 			head := http.Header{}
-			head.Add("Cookie", uuid.NewString())
+			head.Add("User", fmt.Sprintf("%d", i))
+			head.Add("Token", token)
 			dialer := websocket.DefaultDialer
 			dialer.ReadBufferSize = 1024
-			dialer.HandshakeTimeout = time.Duration(1000*time.Second)
+			dialer.HandshakeTimeout = time.Duration(100*time.Second)
 			dialer.WriteBufferPool = &sync.Pool{}
-			c, _, err := dialer.Dial("ws://178.62.52.60:8040/", head)
+			c, _, err := dialer.Dial("ws://127.0.0.1:8080/", head)
 			if err != nil {
 				log.Printf("format string %s", err)
 				//c.Close()
@@ -54,7 +57,7 @@ func main() {
 				}
 			}()
 
-			ticker := time.NewTicker(time.Second*1000000)
+			ticker := time.NewTicker(time.Second*500)
 			defer ticker.Stop()
 
 			for {

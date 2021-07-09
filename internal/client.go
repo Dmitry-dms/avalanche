@@ -1,9 +1,9 @@
-package core
+package internal
 
 import "github.com/Dmitry-dms/avalanche/pkg/websocket"
 
 type Client struct {
-	UserId string
+	UserId string 
 	MessageChan chan string
 	Connection  *websocket.CustomWebsocketTransport
 }

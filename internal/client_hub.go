@@ -1,4 +1,4 @@
-package core
+package internal
 
 import (
 	"errors"
@@ -31,7 +31,7 @@ func newClientHub(maxUsers uint, token string, ttl time.Duration) *ClientHub {
 		ttl: ttl,
 	}
 }
-func (c *ClientHub) AddClient(client *Client) error {
+func (c *ClientHub) addClient(client *Client) error {
 	if ok := c.verifyClient(client.UserId); ok {
 		return errors.New(userExists)
 	}
@@ -45,12 +45,12 @@ func (c *ClientHub) AddClient(client *Client) error {
 	return nil
 }
 func (c *ClientHub) verifyClient(userId string) bool {
-	c.mu.RLock()
+	//c.mu.RLock()
 	_, ok := c.get(userId)
-	c.mu.RUnlock()
+	//c.mu.RUnlock()
 	return ok
 }
-func (c *ClientHub) DeleteClient(userId string) error {
+func (c *ClientHub) deleteClient(userId string) error {
 	if ok := c.verifyClient(userId); !ok {
 		return errors.New(userDExists)
 	}
@@ -68,6 +68,15 @@ func (c *ClientHub) GetUsers() []*Client {
 	c.mu.RLock()
 	for _, client := range c.Users {
 		cl = append(cl, client)
+	}
+	c.mu.RUnlock()
+	return cl
+}
+func (c *ClientHub) GetActiveUsersId() []ClientStat {
+	var cl []ClientStat
+	c.mu.RLock()
+	for _, client := range c.Users {
+		cl = append(cl, ClientStat{UserId: client.UserId})
 	}
 	c.mu.RUnlock()
 	return cl
