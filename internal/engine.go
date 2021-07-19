@@ -34,7 +34,6 @@ type Engine struct {
 	Poller           netpoll.Poller
 	RedisMsgSub      *redis.PubSub
 	RedisSendInfo    func(payload []byte) error
-	RedisAddCompany  func(company addCompanyResponse) error
 	RedisCommandsSub *redis.PubSub
 	Serializer       serializer.AvalancheSerializer
 	AuthManager      *auth.Manager
@@ -49,9 +48,7 @@ func NewEngine(ctx context.Context, config Config, logger *log.Logger, cache Cac
 	redisInfo := func(payload []byte) error {
 		return red.Publish(ctx, config.RedisInfoPrefix, payload).Err() //+config.Name
 	}
-	redisAddCompany := func(company addCompanyResponse) error {
-		return red.Append(ctx, company.CompanyName, company.toString()).Err()
-	}
+
 	redisMsg := red.Subscribe(ctx, config.RedisMsgPrefix)       //+config.Name)
 	redisMain := red.Subscribe(ctx, config.RedisCommandsPrefix) //+config.Name)
 	authManager, err := auth.NewManager(config.AuthJWTkey)
@@ -70,7 +67,6 @@ func NewEngine(ctx context.Context, config Config, logger *log.Logger, cache Cac
 		RedisMsgSub:      redisMsg,
 		RedisSendInfo:    redisInfo,
 		RedisCommandsSub: redisMain,
-		RedisAddCompany:  redisAddCompany,
 		Serializer:       s,
 		AuthManager:      authManager,
 	}
@@ -80,7 +76,7 @@ func NewEngine(ctx context.Context, config Config, logger *log.Logger, cache Cac
 	go engine.startRedisListen()
 	go engine.sendStatisticAboutUsers()
 	go engine.listeningCommands()
-	engine.startupMessage([]byte("WS server succesfully connected to hub"))
+	engine.startupMessage([]byte(fmt.Sprintf("WS server: {%s} {%s} succesfully connected to hub", config.Name, config.Version)))
 	return engine, nil
 }
 
@@ -88,7 +84,7 @@ type redisMessage struct {
 	CompanyName string `json:"company_name"`
 	ClientId    string `json:"client_id"`
 	Message     string `json:"message"`
-}//"{\"company_name\":\"testing\",\"client_id\":\"4\",\"message\":\"10\"}"
+} //"{\"company_name\":\"testing\",\"client_id\":\"4\",\"message\":\"10\"}"
 type AddCompanyMessage struct {
 	CompanyName string `json:"company_name"`
 	MaxUsers    uint   `json:"max_users"`
@@ -104,9 +100,7 @@ type addCompanyResponse struct {
 	CompanyName string       `json:"company_name"`
 }
 
-func (r *addCompanyResponse) toString() string {
-	return fmt.Sprintf("%s:%s", r.Token.ServerName, r.Token.Token)
-}
+
 func (e *Engine) startupMessage(msg []byte) error {
 	return e.RedisSendInfo(msg)
 }
@@ -132,19 +126,33 @@ func (e *Engine) listeningCommands() {
 				e.Logger.Println(err)
 				return
 			}
-			err = e.RedisAddCompany(addCompanyResponse{
+			resp := &addCompanyResponse{
 				CompanyName: c.CompanyName,
 				Token: companyToken{
 					ServerName: e.Conf.Name,
 					Token:      token,
 				},
-			})
+			}
+			err = e.serializeAndSend(resp)
 			if err != nil {
 				e.Logger.Println(err)
 				return
 			}
 		})
 	}
+}
+func (e *Engine) serializeAndSend(v interface{}) error {
+	payload, err := e.Serializer.Serialize(v)
+	if err != nil {
+		e.Logger.Println(err)
+		return err
+	}
+	err = e.RedisSendInfo(payload)
+	if err != nil {
+		e.Logger.Println(err)
+		return err
+	}
+	return nil
 }
 func (e *Engine) sendStatisticAboutUsers() {
 	ticker := time.NewTicker(time.Second * 10)
@@ -155,12 +163,7 @@ func (e *Engine) sendStatisticAboutUsers() {
 			if companies == nil {
 				return
 			}
-			serialized, err := e.Serializer.Serialize(companies)
-			if err != nil {
-				e.Logger.Println(err)
-				return
-			}
-			err = e.RedisSendInfo(serialized)
+			err := e.serializeAndSend(companies)
 			if err != nil {
 				e.Logger.Println(err)
 				return
@@ -225,6 +228,11 @@ func (e *Engine) Handle(conn net.Conn) {
 			if string(key) == "User" {
 				userId = string(value)
 			}
+			if userId == ""{
+				return ws.RejectConnectionError(
+					ws.RejectionReason("UserID is empty"),
+					ws.RejectionStatus(400))
+			}
 			if string(key) == "Token" {
 				var err error
 				companyName, err = e.AuthManager.Parse(string(value))
@@ -237,7 +245,7 @@ func (e *Engine) Handle(conn net.Conn) {
 			return nil
 		},
 	}
-	// Zero-copy upgrade to WebSocket connection.
+
 	_, err := u.Upgrade(conn)
 	if err != nil {
 		log.Printf("%s: upgrade error: %v", conn, err)
@@ -252,10 +260,10 @@ func (e *Engine) Handle(conn net.Conn) {
 	if err != nil {
 		e.Logger.Println(err)
 		conn.Close()
-		_ = ws.RejectConnectionError(ws.RejectionReason("user already exists"), ws.RejectionStatus(400))
+		conn.Write([]byte("User already exists"))
 		return
 	}
-
+	e.Logger.Printf("User with id={%s} and {%s}\n", client.UserId, companyName)
 	readDescriptor := netpoll.Must(netpoll.HandleReadOnce(conn))
 	_ = e.Poller.Start(readDescriptor, func(ev netpoll.Event) {
 
@@ -272,17 +280,14 @@ func (e *Engine) Handle(conn net.Conn) {
 
 			if payload, isControl, err := e.HandleRead(client); err != nil {
 				_ = e.Poller.Stop(readDescriptor)
-				e.Logger.Printf("User with id={%s} was disconnected\n", client.UserId)
+				//e.Logger.Printf("User with id={%s} was disconnected\n", client.UserId)
 				deleteFn()
 				client.Connection.Close()
-
 			} else {
-
 				if !isControl {
 					e.Logger.Printf("Meesage from user={%s}: {%s}\n", client.UserId, payload)
 				}
 				_ = e.Poller.Resume(readDescriptor)
-
 			}
 		})
 	})
@@ -291,7 +296,7 @@ func (e *Engine) Handle(conn net.Conn) {
 			select {
 			case <-client.Connection.CloseCh():
 				deleteFn()
-				e.Logger.Printf("User with id={%s} was disconnected\n", client.UserId)
+				//e.Logger.Printf("User with id={%s} was disconnected\n", client.UserId)
 				return
 			case msg := <-client.MessageChan:
 				e.PoolCommands.Schedule(func() {
@@ -308,9 +313,7 @@ func (e *Engine) Handle(conn net.Conn) {
 			time.Sleep(5 * time.Second)
 		}
 	}()
-	
-	
-	
+
 }
 
 func (e *Engine) GetActiveUsers(w http.ResponseWriter, r *http.Request) {

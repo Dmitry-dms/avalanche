@@ -4,6 +4,7 @@ import (
 	//"fmt"
 	"context"
 
+
 	"io/ioutil"
 	"net"
 	"sync"
@@ -64,11 +65,10 @@ func (t *CustomWebsocketTransport) Read() ([]byte, bool, error) {
 
 	h, r, err := wsutil.NextReader(t.conn, ws.StateServerSide)
 	if err != nil {
-		t.Close()
-		return nil, false, err
+		return nil, true, err
 	}
 	if h.OpCode == ws.OpPing {
-		return nil, true, wsutil.WriteServerMessage(t.conn, ws.OpPong, []byte("pong"))
+		return nil, false, wsutil.WriteServerMessage(t.conn, ws.OpPong, []byte("pong"))
 	}
 	if h.OpCode.IsControl() {
 		return nil, true, wsutil.ControlFrameHandler(t.conn, ws.StateServerSide)(h, r)
