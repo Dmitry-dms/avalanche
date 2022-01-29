@@ -4,6 +4,7 @@ import (
 	//"fmt"
 	"context"
 
+	"fmt"
 
 	"io/ioutil"
 	"net"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/gobwas/ws"
 	"github.com/gobwas/ws/wsutil"
+	"github.com/pkg/errors"
 )
 
 type CustomWebsocketTransport struct {
@@ -65,11 +67,15 @@ func (t *CustomWebsocketTransport) Read() ([]byte, bool, error) {
 
 	h, r, err := wsutil.NextReader(t.conn, ws.StateServerSide)
 	if err != nil {
-		return nil, true, err
+		return nil, true, errors.Wrap(err, "reader error")
 	}
+
+	//TODO: make right header parsing between gorilla and gobwas (opCode is missing in gorilla)
 	if h.OpCode == ws.OpPing {
-		return nil, false, wsutil.WriteServerMessage(t.conn, ws.OpPong, []byte("pong"))
+		fmt.Println("called ping, sending pong")
+		return nil, false, wsutil.WriteServerMessage(t.conn, ws.OpPong, []byte{})
 	}
+
 	if h.OpCode.IsControl() {
 		return nil, true, wsutil.ControlFrameHandler(t.conn, ws.StateServerSide)(h, r)
 	}

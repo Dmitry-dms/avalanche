@@ -2,7 +2,7 @@ package auth
 
 import (
 	//"errors"
-	//"fmt"
+
 
 	"time"
 
@@ -54,6 +54,6 @@ func (m *Manager) Parse(accessToken string) (string, error) {
 	// }
 
 
-	//return claims.CompanyName, nil
+	// return claims.CompanyName, nil
 	return "test",nil
 }

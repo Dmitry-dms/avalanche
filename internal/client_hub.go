@@ -2,6 +2,7 @@ package internal
 
 import (
 	"errors"
+
 	"sync"
 	"sync/atomic"
 	"time"
@@ -16,7 +17,7 @@ var (
 type ClientHub struct {
 	mu          sync.RWMutex
 	Users       map[string]*Client
-	activeUsers *uint64
+	activeUsers uint64
 	maxUsers    uint
 	token       string
 	ttl         time.Duration
@@ -25,7 +26,7 @@ type ClientHub struct {
 func newClientHub(maxUsers uint, token string, ttl time.Duration) *ClientHub {
 	return &ClientHub{
 		Users:       make(map[string]*Client,100),
-		activeUsers: new(uint64),
+		activeUsers: 0,
 		maxUsers:    maxUsers,
 		token: token,
 		ttl: ttl,
@@ -35,13 +36,15 @@ func (c *ClientHub) addClient(client *Client) error {
 	if ok := c.verifyClient(client.UserId); ok {
 		return errors.New(userExists)
 	}
+	
+
 	if c.GetNumActiveUsers() >= uint64(c.maxUsers) {
 		return errors.New(limitUsers)
 	}
 	c.mu.Lock()
 	c.Users[client.UserId] = client
 	c.mu.Unlock()
-	atomic.AddUint64(c.activeUsers, 1)
+	atomic.AddUint64(&c.activeUsers, 1)
 	return nil
 }
 func (c *ClientHub) verifyClient(userId string) bool {
@@ -57,11 +60,11 @@ func (c *ClientHub) deleteClient(userId string) error {
 	c.mu.Lock()
 	delete(c.Users, userId)
 	c.mu.Unlock()
-	atomic.AddUint64(c.activeUsers, ^uint64(0))
+	atomic.AddUint64(&c.activeUsers, ^uint64(0))
 	return nil
 }
 func (c *ClientHub) GetNumActiveUsers() uint64 {
-	return atomic.LoadUint64(c.activeUsers)
+	return atomic.LoadUint64(&c.activeUsers)
 }
 func (c *ClientHub) GetUsers() []*Client {
 	var cl []*Client

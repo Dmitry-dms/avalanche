@@ -2,7 +2,7 @@ package internal
 
 import (
 	"context"
-	"errors"
+
 	"fmt"
 	"time"
 
@@ -16,6 +16,7 @@ import (
 	"github.com/Dmitry-dms/avalanche/pkg/pool"
 	"github.com/Dmitry-dms/avalanche/pkg/serializer"
 	"github.com/Dmitry-dms/avalanche/pkg/websocket"
+	"github.com/pkg/errors"
 
 	"github.com/go-redis/redis/v8"
 	"github.com/mailru/easygo/netpoll"
@@ -90,16 +91,22 @@ type AddCompanyMessage struct {
 	MaxUsers    uint   `json:"max_users"`
 	Duration    int    `json:"duration_hour"`
 } //"{\"company_name\":\"testing\",\"max_users\":1000,\"duration_hour\":10}"
-type companyToken struct {
+type CompanyToken struct {
 	Token      string `json:"token"`
 	ServerName string `json:"server_name"`
 	Duration   int    `json:"duration_hour"`
 }
-type addCompanyResponse struct {
-	Token       companyToken `json:"company_token"`
+type AddCompanyResponse struct {
+	Token       CompanyToken `json:"company_token"`
 	CompanyName string       `json:"company_name"`
 }
 
+type mongoMessage struct {
+	FromId  string `json:"from"`
+	ToId    string `json:"to"`
+	Payload string `json:"payload"`
+	IsRead  bool   `json:"is_read"`
+}
 
 func (e *Engine) startupMessage(msg []byte) error {
 	return e.RedisSendInfo(msg)
@@ -126,11 +133,12 @@ func (e *Engine) listeningCommands() {
 				e.Logger.Println(err)
 				return
 			}
-			resp := &addCompanyResponse{
+			resp := &AddCompanyResponse{
 				CompanyName: c.CompanyName,
-				Token: companyToken{
+				Token: CompanyToken{
 					ServerName: e.Conf.Name,
 					Token:      token,
+					Duration:   c.Duration,
 				},
 			}
 			err = e.serializeAndSend(resp)
@@ -141,6 +149,18 @@ func (e *Engine) listeningCommands() {
 		})
 	}
 }
+
+func (e *Engine) sendMongoMsg(from, to, msg string, read bool) error {
+	mongoMsg := mongoMessage{
+		FromId:  from,
+		ToId:    to,
+		Payload: msg,
+		IsRead:  read,
+	}
+	err := e.serializeAndSend(mongoMsg)
+	return err
+}
+
 func (e *Engine) serializeAndSend(v interface{}) error {
 	payload, err := e.Serializer.Serialize(v)
 	if err != nil {
@@ -213,39 +233,55 @@ func (c *Client) HandleWrite(msg []byte) error {
 func (e *Engine) HandleRead(c *Client) ([]byte, bool, error) {
 	payload, isControl, err := c.Connection.Read()
 	if err != nil {
-		e.Logger.Println(err)
-		return nil, isControl, err
+		return nil, isControl, errors.Wrap(err, "handle read error")
 	}
 	return payload, isControl, err
 }
 func (e *Engine) Handle(conn net.Conn) {
 
 	var userId, companyName string
+	companyName= "test"
+	userId = "user"
 	u := ws.Upgrader{
 		ReadBufferSize:  256,
 		WriteBufferSize: 1024,
 		OnHeader: func(key, value []byte) error {
-			if string(key) == "User" {
-				userId = string(value)
-			}
-			if userId == ""{
-				return ws.RejectConnectionError(
-					ws.RejectionReason("UserID is empty"),
-					ws.RejectionStatus(400))
-			}
-			if string(key) == "Token" {
-				var err error
-				companyName, err = e.AuthManager.Parse(string(value))
-				if err != nil {
-					return ws.RejectConnectionError(
-						ws.RejectionReason(fmt.Sprintf("bad token: %s", err)),
-						ws.RejectionStatus(400))
-				}
-			}
+			//e.Logger.Printf("Key =%s, value = %s", key, value)
+			// if string(key) == "User" {
+			// 	userId = string(value)
+			// }
+			// if userId == "" {
+			// 	return ws.RejectConnectionError(
+			// 		ws.RejectionReason("UserID is empty"),
+			// 		ws.RejectionStatus(400))
+			// }
+			// if string(key) == "Token" {
+			// 	var err error
+			// 	companyName, err = e.AuthManager.Parse(string(value))
+			// 	if err != nil {
+			// 		return ws.RejectConnectionError(
+			// 			ws.RejectionReason(fmt.Sprintf("bad token: %s", err)),
+			// 			ws.RejectionStatus(400))
+			// 	}
+			// }
+
+			// if string(key) == "User" {
+			// 	userId = string(value)
+			// } else if string(key) == "Token" {
+			// 	var err error
+			// 	companyName, err = e.AuthManager.Parse(string(value))
+			// 	if err != nil {
+			// 		return ws.RejectConnectionError(
+			// 			ws.RejectionReason(fmt.Sprintf("bad token: %s", err)),
+			// 			ws.RejectionStatus(400))
+			// 	}
+			// }
+			// } else {
+
+			// }
 			return nil
 		},
 	}
-
 	_, err := u.Upgrade(conn)
 	if err != nil {
 		log.Printf("%s: upgrade error: %v", conn, err)
@@ -264,55 +300,61 @@ func (e *Engine) Handle(conn net.Conn) {
 		return
 	}
 	e.Logger.Printf("User with id={%s} and {%s}\n", client.UserId, companyName)
-	readDescriptor := netpoll.Must(netpoll.HandleReadOnce(conn))
-	_ = e.Poller.Start(readDescriptor, func(ev netpoll.Event) {
+	//	readDescriptor := netpoll.Must(netpoll.HandleReadOnce(conn))
+	//_ = e.Poller.Start(readDescriptor, func(ev netpoll.Event) {
 
-		if ev&(netpoll.EventReadHup|netpoll.EventHup) != 0 {
-			_ = e.Poller.Stop(readDescriptor)
-			deleteFn()
-			client.Connection.Close()
-			e.Logger.Printf("User with id={%s} was disconnected\n", client.UserId)
-			//e.Logger.Println("read poller error")
-			return
-		}
+	//if ev&(netpoll.EventReadHup|netpoll.EventHup) != 0 {
+	//	_ = e.Poller.Stop(readDescriptor)
+	//	deleteFn()
+	//client.Connection.Close()
+	//e.Logger.Printf("User with id={%s} was disconnected\n", client.UserId)
+	//e.Logger.Println("read poller error")
+	//return
+	//}
 
-		e.PoolCommands.Schedule(func() {
-
-			if payload, isControl, err := e.HandleRead(client); err != nil {
-				_ = e.Poller.Stop(readDescriptor)
-				//e.Logger.Printf("User with id={%s} was disconnected\n", client.UserId)
-				deleteFn()
-				client.Connection.Close()
-			} else {
-				if !isControl {
-					e.Logger.Printf("Meesage from user={%s}: {%s}\n", client.UserId, payload)
-				}
-				_ = e.Poller.Resume(readDescriptor)
-			}
-		})
-	})
+	//e.PoolCommands.Schedule(func() {
 	go func() {
 		for {
-			select {
-			case <-client.Connection.CloseCh():
+			if payload, isControl, err := e.HandleRead(client); err != nil {
+				//_ = e.Poller.Stop(readDescriptor)
+				e.Logger.Printf("User with id={%s} was disconnected\n", client.UserId)
 				deleteFn()
-				//e.Logger.Printf("User with id={%s} was disconnected\n", client.UserId)
+				client.Connection.Close()
 				return
-			case msg := <-client.MessageChan:
-				e.PoolCommands.Schedule(func() {
-					if err := client.HandleWrite([]byte(msg)); err != nil {
-						e.Logger.Printf("User with id={%s} was disconnected\n", client.UserId)
-						deleteFn()
-						client.Connection.Close()
-						return
-					} else {
-						e.Logger.Printf("Meesage was send to user={%s}\n", client.UserId)
-					}
-				})
+			} else {
+				//e.Logger.Print("read\n")
+				if !isControl {
+					e.Logger.Printf("Message from user={%s}: {%s}\n", client.UserId, payload)
+					//wsutil.WriteServerMessage(conn, ws.OpPing, []byte{})
+				} 
+				//_ = e.Poller.Resume(readDescriptor)
 			}
-			time.Sleep(5 * time.Second)
 		}
 	}()
+	//})
+	//})
+	//go func() {
+	for {
+		select {
+		case <-client.Connection.CloseCh():
+			//deleteFn()
+			//e.Logger.Printf("User with id={%s} was disconnected\n", client.UserId)
+			break
+		case msg := <-client.MessageChan:
+			e.PoolCommands.Schedule(func() {
+				if err := client.HandleWrite([]byte(msg)); err != nil {
+					e.Logger.Printf("User with id={%s} was disconnected\n", client.UserId)
+					//deleteFn()
+					client.Connection.Close()
+					return
+				} else {
+					e.Logger.Printf("Meesage was send to user={%s}\n", client.UserId)
+				}
+			})
+		}
+		//time.Sleep(5 * time.Second)
+	}
+	//}()
 
 }
 
@@ -320,6 +362,14 @@ func (e *Engine) GetActiveUsers(w http.ResponseWriter, r *http.Request) {
 	users, _ := e.Subs.GetActiveUsers("test")
 	_, _ = w.Write([]byte(fmt.Sprintf("%d", users)))
 	e.Logger.Printf("Active users = %d", users)
+}
+func (e *Engine) sendMsg(client *Client, msg string) bool {
+
+	if client.MessageChan == nil {
+		return false
+	}
+	client.MessageChan <- msg
+	return true
 }
 func (e *Engine) SendToClientById(w http.ResponseWriter, r *http.Request) {
 	userId := r.Header.Get("user-id")
@@ -331,14 +381,10 @@ func (e *Engine) SendToClientById(w http.ResponseWriter, r *http.Request) {
 	}
 	client, ok := e.Subs.GetClient(companyName, userId)
 	if !ok {
-		printError(w, "client doesn't exists", http.StatusInternalServerError)
+		printError(w, "User offline", http.StatusBadRequest)
 		return
 	}
-	if client.MessageChan == nil {
-		printError(w, "client's channel was deleted", http.StatusInternalServerError)
-		return
-	}
-	client.MessageChan <- payload
+	ok = e.sendMsg(client, payload)
 }
 func printError(w http.ResponseWriter, msg string, statusCode int) {
 	w.Header().Set("Content-Type", "application/json")

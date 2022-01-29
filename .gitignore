@@ -1,7 +1,9 @@
 /test
-/test2
+/test2-client-gorilla1
 /client
-/test3
-/test4
-/test5
+/test3-client-gorilla
+/test5-auth
 /redis
+binsize.svg
+client.exe
+Makefile

@@ -35,6 +35,7 @@ func NewRamCache() *RamCache {
 }
 
 type CompanyStats struct {
+	Name        string       `json:"company_name"`
 	OnlineUsers uint         `json:"online_users"`
 	MaxUsers    uint         `json:"max_users"`
 	Users       []ClientStat `json:"active_users"`
@@ -46,9 +47,10 @@ type ClientStat struct {
 func (r *RamCache) GetStatisctics() []CompanyStats {
 	r.mu.RLock()
 	var stats []CompanyStats
-	for _, company := range r.users {
+	for companyName, company := range r.users {
 		usersStat := company.GetActiveUsersId()
 		stats = append(stats, CompanyStats{
+			Name: companyName,
 			Users:       usersStat,
 			MaxUsers:    company.maxUsers,
 			OnlineUsers: uint(company.GetNumActiveUsers()),
