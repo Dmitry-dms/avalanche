@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+
 	"log"
 	"net"
 	"net/http"
@@ -55,7 +56,7 @@ func main() {
 		Version:             "1",
 		MaxConnections:      100000,
 		AuthJWTkey:          "token23",
-		RedisAddress:        "host.docker.internal:6050",
+		RedisAddress:        "host.docker.internal:6160",
 		RedisCommandsPrefix: "comm",
 		RedisMsgPrefix:      "msg",
 		RedisInfoPrefix:     "info",
@@ -78,18 +79,12 @@ func main() {
 	ctx := context.Background()
 	engine, _ := internal.NewEngine(ctx, config, infoLog, cache, ln, poolConnection, poolCommands, poller, jsonSerializer)
 
-	//ticker := time.NewTicker(time.Second * 60)
-	// go func() {
-	// 	for range ticker.C {
-	// 		engine.Subs.DeleteOfflineClients()
-	// 	}
-	// }()
 	engine.Subs.AddCompany("test", "1", 100000, time.Hour*24)
 
 	log.Printf("listening %s (%q)", ln.Addr(), addr)
 
 	//acceptDesc := netpoll.Must(netpoll.HandleListener(ln, netpoll.EventRead|netpoll.EventOneShot))
-	accept := make(chan error, 1)
+	//accept := make(chan error, 1)
 
 	//_ = engine.Poller.Start(acceptDesc, func(e netpoll.Event) {
 	// We do not want to accept incoming connection when goroutine pool is
@@ -100,32 +95,30 @@ func main() {
 	go func() {
 		for {
 			conn, err := ln.Accept()
-			if err != nil {
-				log.Printf("format string :%s", err)
-				accept <- err
-				return
-			}
-			//accept <- nil
-			go engine.Handle(conn)
+			go func(conn net.Conn, err error) {
+				if err != nil {
+					if ne, ok := err.(net.Error); ok && ne.Temporary() {
+						goto cooldown
+					}
+					log.Fatalf("accept error: %v", err)
+				cooldown:
+					delay := 5 * time.Millisecond
+					log.Printf("accept error: %v; retrying in %s", err, delay)
+					time.Sleep(delay)
+					//return
+				}
+				//accept <- nil
+				go engine.Handle(conn)
+			}(conn, err)
 		}
 	}()
 
 	//})
-	// if err == nil {
-	// 	err = <-accept
-	// }
+	//if err == nil {
+	// err = <-accept
+	// //}
 	// if err != nil {
 
-	// 	if ne, ok := err.(net.Error); ok && ne.Temporary() {
-	// 		goto cooldown
-	// 	}
-
-	// 	log.Fatalf("accept error: %v", err)
-
-	// cooldown:
-	// 	delay := 5 * time.Millisecond
-	// 	log.Printf("accept error: %v; retrying in %s", err, delay)
-	// 	time.Sleep(delay)
 	// }
 
 	//_ = engine.Poller.Resume(acceptDesc)

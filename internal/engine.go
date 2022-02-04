@@ -2,6 +2,7 @@ package internal
 
 import (
 	"context"
+	"strings"
 
 	"fmt"
 	"time"
@@ -220,11 +221,11 @@ func initRedis(address string) *redis.Client {
 	return r
 }
 
-func (c *Client) HandleWrite(msg []byte) error {
+func (c *Client) HandleWrite(msg []byte, msgType ws.OpCode) error {
 	if c.Connection.IsClosed() {
 		return errors.New("connection was closed")
 	}
-	err := c.Connection.Write(msg)
+	err := c.Connection.Write(msg, msgType)
 	if err != nil {
 		return err
 	}
@@ -235,13 +236,13 @@ func (e *Engine) HandleRead(c *Client) ([]byte, bool, error) {
 	if err != nil {
 		return nil, isControl, errors.Wrap(err, "handle read error")
 	}
-	return payload, isControl, err
+	return payload, isControl, nil
 }
 func (e *Engine) Handle(conn net.Conn) {
 
 	var userId, companyName string
-	companyName= "test"
-	userId = "user"
+	//companyName = "test"
+	//userId = "user"
 	u := ws.Upgrader{
 		ReadBufferSize:  256,
 		WriteBufferSize: 1024,
@@ -265,17 +266,17 @@ func (e *Engine) Handle(conn net.Conn) {
 			// 	}
 			// }
 
-			// if string(key) == "User" {
-			// 	userId = string(value)
-			// } else if string(key) == "Token" {
-			// 	var err error
-			// 	companyName, err = e.AuthManager.Parse(string(value))
-			// 	if err != nil {
-			// 		return ws.RejectConnectionError(
-			// 			ws.RejectionReason(fmt.Sprintf("bad token: %s", err)),
-			// 			ws.RejectionStatus(400))
-			// 	}
-			// }
+			if string(key) == "User" {
+				userId = string(value)
+			} else if string(key) == "Token" {
+				var err error
+				companyName, err = e.AuthManager.Parse(string(value))
+				if err != nil {
+					return ws.RejectConnectionError(
+						ws.RejectionReason(fmt.Sprintf("bad token: %s", err)),
+						ws.RejectionStatus(400))
+				}
+			}
 			// } else {
 
 			// }
@@ -290,7 +291,7 @@ func (e *Engine) Handle(conn net.Conn) {
 	}
 
 	var client *Client
-	transport := websocket.NewWebsocketTransport(conn)
+	transport := websocket.NewWebsocketTransport(conn, time.Second*20)
 	client = NewClient(transport, userId)
 	err, deleteFn := e.Subs.AddClient(companyName, client)
 	if err != nil {
@@ -299,7 +300,12 @@ func (e *Engine) Handle(conn net.Conn) {
 		conn.Write([]byte("User already exists"))
 		return
 	}
-	e.Logger.Printf("User with id={%s} and {%s}\n", client.UserId, companyName)
+	closeAndDel := func(cl *Client) {
+		e.Logger.Printf("User with id={%s} was disconnected\n", client.UserId)
+		deleteFn()
+	}
+
+	e.Logger.Printf("User connected with id={%s} and {%s}\n", client.UserId, companyName)
 	//	readDescriptor := netpoll.Must(netpoll.HandleReadOnce(conn))
 	//_ = e.Poller.Start(readDescriptor, func(ev netpoll.Event) {
 
@@ -313,49 +319,62 @@ func (e *Engine) Handle(conn net.Conn) {
 	//}
 
 	//e.PoolCommands.Schedule(func() {
-	go func() {
-		for {
-			if payload, isControl, err := e.HandleRead(client); err != nil {
-				//_ = e.Poller.Stop(readDescriptor)
-				e.Logger.Printf("User with id={%s} was disconnected\n", client.UserId)
-				deleteFn()
-				client.Connection.Close()
-				return
-			} else {
-				//e.Logger.Print("read\n")
-				if !isControl {
-					e.Logger.Printf("Message from user={%s}: {%s}\n", client.UserId, payload)
-					//wsutil.WriteServerMessage(conn, ws.OpPing, []byte{})
-				} 
-				//_ = e.Poller.Resume(readDescriptor)
-			}
-		}
-	}()
+	// go func() {
+	// write:
+	// 	for {
+	// 		select {
+	// 		case <-client.Connection.CloseCh():
+	// 			//deleteFn()
+	// 			break write
+	// 		case <-client.Connection.Timer.C:
+	// 			fmt.Println("timer has expired")
+	// 			client.Connection.Close()
+
+	// 			break write
+
+	// 		case msg := <-client.MessageChan:
+	// 			e.PoolCommands.Schedule(func() {
+	// 				if err := client.HandleWrite([]byte(msg), ws.OpText); err != nil {
+	// 					//e.Logger.Printf("User with id={%s} was disconnected\n", client.UserId)
+	// 					//deleteFn()
+	// 					//client.Connection.Close()
+
+	// 				} else {
+	// 					e.Logger.Printf("Message was send to user={%s}\n", client.UserId)
+	// 				}
+	// 			})
+	// 		//default:
+	// 		}
+	// 	}
+
+	// }()
 	//})
 	//})
 	//go func() {
-	for {
-		select {
-		case <-client.Connection.CloseCh():
-			//deleteFn()
-			//e.Logger.Printf("User with id={%s} was disconnected\n", client.UserId)
-			break
-		case msg := <-client.MessageChan:
-			e.PoolCommands.Schedule(func() {
-				if err := client.HandleWrite([]byte(msg)); err != nil {
-					e.Logger.Printf("User with id={%s} was disconnected\n", client.UserId)
-					//deleteFn()
-					client.Connection.Close()
-					return
-				} else {
-					e.Logger.Printf("Meesage was send to user={%s}\n", client.UserId)
-				}
-			})
-		}
-		//time.Sleep(5 * time.Second)
-	}
-	//}()
 
+	//}()
+	for {
+		payload, isControl, err := e.HandleRead(client)
+		if err != nil {
+			//fmt.Println("error read")
+			//_ = e.Poller.Stop(readDescriptor)
+			//e.Logger.Printf("User with id={%s} was disconnected\n", client.UserId)
+			//deleteFn()
+			//client.Connection.Close()
+			closeAndDel(client)
+			return
+		} else {
+			if !isControl {
+				if string(payload) == "test" {
+					client.HandleWrite([]byte{}, ws.OpPing)
+					continue
+				}
+				client.MessageChan <- strings.ToUpper(string(payload))
+				e.Logger.Printf("Message from user={%s}: {%s}\n", client.UserId, payload)
+			}
+			//_ = e.Poller.Resume(readDescriptor)
+		}
+	}
 }
 
 func (e *Engine) GetActiveUsers(w http.ResponseWriter, r *http.Request) {

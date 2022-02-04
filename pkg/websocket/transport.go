@@ -3,6 +3,7 @@ package websocket
 import (
 	//"fmt"
 	"context"
+	"time"
 
 	"fmt"
 
@@ -22,6 +23,8 @@ type CustomWebsocketTransport struct {
 	closed  bool
 	closeCh chan struct{}
 	conn    net.Conn
+	Timer   *time.Timer
+	interval time.Duration
 }
 type CustomCancelContext struct {
 	context.Context
@@ -47,17 +50,19 @@ func (c CustomCancelContext) Err() error {
 	}
 }
 
-func NewWebsocketTransport(conn net.Conn) *CustomWebsocketTransport {
+func NewWebsocketTransport(conn net.Conn, interval time.Duration) *CustomWebsocketTransport {
 	return &CustomWebsocketTransport{
 		conn:    conn,
 		closeCh: make(chan struct{}),
+		Timer:   time.NewTimer(interval),
+		interval: interval,
 	}
 }
 func (t *CustomWebsocketTransport) IsClosed() bool {
 	return t.closed
 }
 
-func (t *CustomWebsocketTransport) CloseCh() chan struct{} {
+func (t *CustomWebsocketTransport) CloseCh() <-chan struct{} {
 	return t.closeCh
 }
 
@@ -75,6 +80,14 @@ func (t *CustomWebsocketTransport) Read() ([]byte, bool, error) {
 		fmt.Println("called ping, sending pong")
 		return nil, false, wsutil.WriteServerMessage(t.conn, ws.OpPong, []byte{})
 	}
+	if h.OpCode == ws.OpPong {
+		fmt.Println("called pong")
+		if !t.Timer.Stop() {
+			<-t.Timer.C
+		}
+		t.Timer.Reset(t.interval)
+		return nil, false, nil
+	}
 
 	if h.OpCode.IsControl() {
 		return nil, true, wsutil.ControlFrameHandler(t.conn, ws.StateServerSide)(h, r)
@@ -88,36 +101,24 @@ func (t *CustomWebsocketTransport) Read() ([]byte, bool, error) {
 	return data, false, nil
 }
 
-func (t *CustomWebsocketTransport) Write(msg []byte) error {
-	messageType := ws.OpText
-	if err := wsutil.WriteServerMessage(t.conn, messageType, msg); err != nil {
+func (t *CustomWebsocketTransport) Write(msg []byte, msgType ws.OpCode) error {
+	if err := wsutil.WriteServerMessage(t.conn, msgType, msg); err != nil {
 		return err
 	}
 	return nil
-	//for {
-	// select {
-	// case <-t.closeCh:
-	// 		return nil
-	// case msg := <-ch:
-	// 	messageType := ws.OpText
-	// 	if err := wsutil.WriteServerMessage(t.conn, messageType, []byte(msg)); err != nil {
-	// 		return err
-	// 	}
-	// 	return nil
-	// }
-	//}
 }
 
 func (t *CustomWebsocketTransport) Close() error {
 	//t.mu.Lock()
-	//log.Println("CLOSING")
 	if t.closed {
+		fmt.Println(t.closed)
 		//t.mu.Unlock()
 		return nil
 	}
 	t.closed = true
-	t.closeCh <- struct{}{}
+	//t.closeCh <- struct{}{}
 	close(t.closeCh)
+	t.Timer.Stop()
 	//t.mu.Unlock()
 	// data := ws.NewCloseFrameBody(ws.StatusNormalClosure, "closing connection")
 	// _ = wsutil.WriteServerMessage(t.conn, ws.OpClose, data)
