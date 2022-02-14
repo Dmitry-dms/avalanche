@@ -36,7 +36,7 @@ type Engine struct {
 	PoolConnection   *pool.Pool
 	PoolCommands     *pool.Pool
 	Poller           netpoll.Poller
-	Redis            *redis.Client
+	Redis            *Redis
 	RedisMsgSub      *redis.PubSub
 	RedisSendInfo    func(payload []byte) error
 	RedisCommandsSub *redis.PubSub
@@ -48,14 +48,14 @@ func NewEngine(ctx context.Context, config Config, logger *zerolog.Logger, cache
 	conn net.Listener, poolConn *pool.Pool, poolComm *pool.Pool,
 	poller netpoll.Poller, s serializer.AvalancheSerializer) (*Engine, error) {
 
-	red := initRedis(config.RedisAddress)
+	red := InitRedis(config.RedisAddress)
 
 	redisInfo := func(payload []byte) error {
-		return red.Publish(ctx, config.RedisInfoPrefix, payload).Err() //+config.Name
+		return red.publish(ctx, config.RedisInfoPrefix, payload) //+config.Name
 	}
 
-	redisMsg := red.Subscribe(ctx, config.RedisMsgPrefix)       //+config.Name)
-	redisMain := red.Subscribe(ctx, config.RedisCommandsPrefix) //+config.Name)
+	redisMsg := red.subscribe(ctx, config.RedisMsgPrefix)       //+config.Name)
+	redisMain := red.subscribe(ctx, config.RedisCommandsPrefix) //+config.Name)
 	authManager, err := auth.NewManager(config.AuthJWTkey)
 	if err != nil {
 		return nil, err
@@ -76,13 +76,13 @@ func NewEngine(ctx context.Context, config Config, logger *zerolog.Logger, cache
 		AuthManager:      authManager,
 		Redis:            red,
 	}
-	if err := red.Ping(red.Context()).Err(); err != nil {
+	if err := red.ping(); err != nil {
 		engine.Logger.Fatal().Err(err).Msg("can't' connect to redis")
 	}
 
-	//go engine.startRedisListen()
-	//go engine.sendStatisticAboutUsers()
-	//go engine.listeningCommands()
+	go engine.startRedisListen()
+	go engine.sendStatisticAboutUsers()
+	go engine.listeningCommands()
 	engine.startupMessage([]byte(fmt.Sprintf("WS server: {%s} {%s} succesfully connected to hub", config.Name, config.Version)))
 	return engine, nil
 }
@@ -189,21 +189,18 @@ func (e *Engine) startRedisListen() {
 			}
 			client, isOnline := e.Subs.GetClient(m.CompanyName, m.ClientId)
 			if !isOnline {
-				e.Logger.Warn().Err(err)
-				return // TODO: Handle error
+				_, length := e.Redis.sGetMembers(context.TODO(), m.ClientId)
+				if length > int(e.Conf.MaxUserMessages) {
+					e.Logger.Warn().Msgf("user with id=%s has reached the limit of cached messages", m.ClientId)
+				} else {
+					e.Redis.sAdd(context.TODO(), m.ClientId, msg.Payload)
+				}
+				return
 			}
 			e.Logger.Printf("Message {%s} to client {%s} with company id {%s}", m.Message, m.ClientId, m.CompanyName)
 			e.sendMsg(Message{client, []byte(msg.Payload)}, m.CompanyName)
 		})
 	}
-}
-func initRedis(address string) *redis.Client {
-	r := redis.NewClient(&redis.Options{
-		Addr:     address,
-		Password: "",
-		DB:       0,
-	})
-	return r
 }
 
 func (c *Client) HandleWrite(msg []byte, msgType ws.OpCode) error {
@@ -255,6 +252,9 @@ func (e *Engine) Handle(conn net.Conn) {
 
 	readDescriptor, _ := netpoll.Handle(conn, netpoll.EventRead) //netpoll.Must(netpoll.HandleRead(conn))
 
+	cachedMessages, length := e.Redis.sGetMembers(context.TODO(), userId)
+
+
 	client := NewClient(transport, userId, readDescriptor)
 	err, deleteFn := e.Subs.AddClient(companyName, client)
 	if err != nil {
@@ -268,6 +268,15 @@ func (e *Engine) Handle(conn net.Conn) {
 		deleteFn()
 	}
 	e.Logger.Info().Msgf("user connected with id={%s} and {%s}\n", client.UserId, companyName)
+
+	if length > 0 {
+		e.PoolCommands.Schedule(func() {
+			for _, msg := range cachedMessages {
+				e.sendMsg(Message{client, []byte(msg)}, companyName)
+			}
+			e.Redis.deleteK(context.TODO(), client.UserId)
+		})
+	}
 
 	// go func() {
 	// write:
@@ -338,12 +347,12 @@ func (e *Engine) SaveState() error {
 		return err
 	}
 	ctx := context.Background()
-	return e.Redis.Set(ctx, "save", data, 0).Err()
+	return e.Redis.setKV(ctx, "save", data, 0)
 }
 
 func (e *Engine) RestoreState() error {
-	ctx := context.Background()
-	val, err := e.Redis.Get(ctx, "save").Result()
+	ctx := context.TODO()
+	val, err := e.Redis.getV(ctx, "save")
 	if err == redis.Nil {
 		return errors.New("key doesn't exists")
 	}
@@ -370,14 +379,14 @@ func (e *Engine) listenCommands() {
 		switch {
 		case command == "help":
 			fmt.Println("There will be help info")
-		// case command[:4] == "add":
-		// 	splited := strings.Split(command, " ")
-		// 	if len(splited) > 3 {
-		// 		fmt.Println("Wrong add command")
-		// 	} else {
+			// case command[:4] == "add":
+			// 	splited := strings.Split(command, " ")
+			// 	if len(splited) > 3 {
+			// 		fmt.Println("Wrong add command")
+			// 	} else {
 
-		// 	}
-		 }
+			// 	}
+		}
 	}
 }
 

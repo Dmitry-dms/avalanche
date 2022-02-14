@@ -2,8 +2,8 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"os/signal"
+	"runtime"
 	"strconv"
 	"syscall"
 
@@ -93,6 +93,7 @@ func main() {
 	}
 	addr := os.Getenv("WS_PORT")
 	maxConn, _ := strconv.Atoi(os.Getenv("MAX_CONNECTIONS"))
+	maxUserMsg, _ := strconv.Atoi(os.Getenv("MAX_USERS_MESSAGES"))
 	config := internal.Config{
 		Name:                os.Getenv("NAME"),
 		Version:             os.Getenv("VERSION"),
@@ -102,6 +103,7 @@ func main() {
 		RedisCommandsPrefix: os.Getenv("REDIS_COMMAND_PREFIX"),
 		RedisMsgPrefix:      os.Getenv("REDIS_MSG_PREFIX"),
 		RedisInfoPrefix:     os.Getenv("REDIS_INFO_PREFIX"),
+		MaxUserMessages:     maxUserMsg,
 	}
 	zerolg := NewConsole(true)
 	poller, err := netpoll.New(nil)
@@ -180,7 +182,7 @@ func main() {
 		mux.Handle("/heap", pprof.Handler("heap"))
 		mux.Handle("/allocs", pprof.Handler("allocs"))
 		mux.Handle("/goroutine", pprof.Handler("goroutine"))
-		mux.HandleFunc("/a", engine.GetActiveUsers)
+		mux.HandleFunc("/a", mid(engine.GetActiveUsers))
 		log.Printf("run http server on %s", port)
 		if err := http.ListenAndServe(port, mux); err != nil {
 			zerolg.Fatal().Err(err).Msgf("Can't start monitoring on port %s", port)
@@ -201,9 +203,9 @@ func main() {
 	}
 
 }
-func mid(h http.Handler) http.HandlerFunc {
+func mid(h http.HandlerFunc) http.HandlerFunc {
 	return func(rw http.ResponseWriter, r *http.Request) {
-		fmt.Println("a ...interface{}")
+		runtime.GC()
 		h.ServeHTTP(rw, r)
 	}
 }

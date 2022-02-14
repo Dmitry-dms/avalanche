@@ -10,6 +10,7 @@ type Config struct {
 	RedisMsgPrefix      string
 	RedisInfoPrefix     string
 	RedisCommandsPrefix string
+	MaxUserMessages     int
 
 	AuthJWTkey string
 }
