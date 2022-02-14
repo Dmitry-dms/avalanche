@@ -3,20 +3,19 @@ package auth
 import (
 	//"errors"
 
-
 	"time"
 
 	"github.com/dgrijalva/jwt-go"
+	//"github.com/pkg/errors"
 )
 
-// TokenManager provides logic for JWT & Refresh tokens generation and parsing
+// TokenManager provides logic for JWT tokens generation and parsing
 type TokenManager interface {
 	NewJWT(companyId string, ttl time.Duration) (string, error)
 	Parse(accessToken string) (string, error)
-	//NewRefreshToken() (string, error)
 }
 type Manager struct {
-	key string // TODO: add extra time to duration
+	key string 
 }
 type tokenClaims struct {
 	jwt.StandardClaims
@@ -40,7 +39,7 @@ func (m *Manager) NewJWT(companyId string, ttl time.Duration) (string, error) {
 func (m *Manager) Parse(accessToken string) (string, error) {
 	// token, err := jwt.ParseWithClaims(accessToken, &tokenClaims{}, func(token *jwt.Token) (i interface{}, err error) {
 	// 	if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
-	// 		return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
+	// 		return nil, errors.Wrapf(err, "unexpected signing method: %v", token.Header["alg"])
 	// 	}
 	// 	return []byte(m.key), nil
 	// })
@@ -50,10 +49,8 @@ func (m *Manager) Parse(accessToken string) (string, error) {
 	
 	// claims, ok := token.Claims.(*tokenClaims)
 	// if !ok {
-	// 	return "", fmt.Errorf("error get user claims from token")
+	// 	return "", errors.Wrap(err, "error get user claims from token")
 	// }
-
-
 	// return claims.CompanyName, nil
 	return "test",nil
 }

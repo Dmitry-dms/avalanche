@@ -7,6 +7,7 @@ RUN cd /src && go build -o goapp ./cmd/main.go
 FROM alpine AS avalanche
 WORKDIR /app
 COPY --from=build-env /src/goapp /app/
+COPY .env /app/
 ENTRYPOINT ./goapp
 
 

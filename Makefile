@@ -1,21 +1,29 @@
 .SILENT:
 
+WS_PORT=8000
+MONITORING_PORT=7090
+NUM_CONNECT=5000
 
 r:
 	go run cmd/main.go
 cl:
-	go run client/client.go
+	go run client/client.go ${WS_PORT} ${NUM_CONNECT}
 c:
 	go run test3-client-gorilla/main.go
 run:
 	
 	# docker run -d --name=pyro -p 4040:4040 pyroscope/pyroscope server
 	
-	docker run -d --name=ava -p 8446:8000 -p 8667:8090 avalanche
+	docker run  -d --name=ava -p ${WS_PORT}:8000 -p ${MONITORING_PORT}:8090 avalanche
 	# docker run -d --rm --name=test1 --ulimit nofile=100000:100009  test
 	#docker run -d --name=test2 --ulimit nofile=100000:100009  test
 	# docker run -d --name=test3 --ulimit nofile=100000:100009  test
-	
+graph:
+	docker run -d -p 9090:9090 prom/prometheus
+	docker run -d --name=grafana -p 3000:3000 grafana/grafana	
+pr: 
+	docker build -t my-prometheus prometheus/
+	docker run -d --name=prom -p 9090:9090 my-prometheus
 run1:
 	docker run -d --name=redis -p 6050:6379 redis
 	docker run -d --rm --name=ava --network=chat-system -p 8446:8000 -p 8667:8090  avalanche
@@ -34,6 +42,18 @@ build:
 	docker rmi avalanche
 	docker build -t avalanche:latest .
 	make run
+	#make cl
+build1:
+	docker build -t avalanche:latest .
+	
+goroutine:
+	go tool pprof  http://127.0.0.1:${MONITORING_PORT}/goroutine
+heap:
+	go tool pprof  http://127.0.0.1:${MONITORING_PORT}/heap	
+profile:
+	go tool pprof  http://127.0.0.1:${MONITORING_PORT}/profile
+allocs:
+	go tool pprof  http://127.0.0.1:${MONITORING_PORT}/allocs
 # docker run -d --name=pyro -p 4040:4040 pyroscope/pyroscope server
 # docker rm -f pyro
 # --ulimit nofile=100000:100009
