@@ -2,7 +2,7 @@
 
 WS_PORT=8000
 MONITORING_PORT=8090
-NUM_CONNECT=10000
+NUM_CONNECT=1000
 
 r:
 	go run cmd/main.go
@@ -42,7 +42,7 @@ build:
 	docker rmi avalanche
 	docker build -t avalanche:latest .
 	make run
-	#make cl
+	make cl
 build1:
 	docker build -t avalanche:latest .
 	

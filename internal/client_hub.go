@@ -8,7 +8,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/mailru/easygo/netpoll"
 )
 
 var (
@@ -25,7 +24,7 @@ type ClientHub struct {
 
 	ttl         time.Duration
 	timer       *time.Timer
-	poller      netpoll.Poller
+
 	msg         chan Message
 	expired     bool
 
@@ -37,7 +36,7 @@ type Message struct {
 	Msg []byte
 }
 
-func newClientHub(maxUsers uint, ttl time.Duration, wr func(msg Message), p netpoll.Poller) *ClientHub {
+func newClientHub(maxUsers uint, ttl time.Duration) *ClientHub {
 	hub := ClientHub{
 		Users:       make(map[string]*Client, maxUsers >> 1),
 		activeUsers: 0,
@@ -45,16 +44,15 @@ func newClientHub(maxUsers uint, ttl time.Duration, wr func(msg Message), p netp
 		ttl:         ttl,
 		msg:         make(chan Message),
 		timer:       time.NewTimer(ttl),
-		poller:      p,
 		Time: time.Now(),
 	}
-	go hub.listen(wr)
+	go hub.listen()
 	return &hub
 }
 func (c *ClientHub) IsExpired() bool {
 	return c.expired
 }
-func (c *ClientHub) listen(wr func(msg Message)) {
+func (c *ClientHub) listen() {
 	for {
 		select {
 		case <-c.timer.C:
@@ -63,18 +61,16 @@ func (c *ClientHub) listen(wr func(msg Message)) {
 			c.expired = true
 			return
 		case usr := <-c.msg:
-			wr(usr)
+			usr.Connection.Write(usr.Msg)
 		}
 	}
 }
 
 func (c *ClientHub) deleteClients() {
 	for _, cl := range c.Users {
-		cl.Desc.Close()
-		//err := c.poller.Stop(cl.Desc)
-		err2 := cl.Disconnect()
-		err3 := c.deleteClient(cl.UserId)
-		fmt.Printf("client with id = %s was deleted. {%s} {%s} \n", cl.UserId, err2, err3)
+		cl.Disconnect()
+		c.deleteClient(cl.UserId)
+		fmt.Printf("client with id = %s was deleted.  \n", cl.UserId)
 	}
 }
 

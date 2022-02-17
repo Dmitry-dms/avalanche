@@ -2,10 +2,10 @@ package internal
 
 import (
 	"errors"
+	"fmt"
 	"sync"
 	"time"
 
-	"github.com/mailru/easygo/netpoll"
 )
 
 type deleteClientFn func() error
@@ -13,7 +13,7 @@ type deleteClientFn func() error
 type Cache interface {
 	AddCompany(companyName string, maxUsers uint, ttl time.Duration) error
 	GetCompany(companyName string) (*ClientHub, error)
-	DeleteCompany(companyName string)
+	DeleteCompany(companyName string) error
 	AddClient(companyName string, client *Client) (error, deleteClientFn)
 	GetClient(companyName, clientId string) (*Client, bool)
 	GetActiveUsers(companyName string) (uint, error)
@@ -21,23 +21,25 @@ type Cache interface {
 	SendMessage(msg Message, companyName string)
 }
 
-var (
-	ErrCompanyAE  = "company already exists!"
+const (
+	ErrCompanyAE  = "company already exists"
 	ErrCompanyDE = "company doesn't exists"
+
+	MaxCharLength = 36 // RFC4122 p.3
+
+)
+var (
+	ErrCharMaxLength = fmt.Sprintf("name must be less than %d characters", MaxCharLength)
 )
 
 type RamCache struct {
 	mu    sync.RWMutex
 	users map[string]*ClientHub
-	wr    func(msg Message)
-	p     netpoll.Poller
 }
 
-func NewRamCache(wr func(msg Message), p netpoll.Poller) *RamCache {
+func NewRamCache() *RamCache {
 	return &RamCache{
 		users: make(map[string]*ClientHub, 20),
-		wr:    wr,
-		p:     p,
 	}
 }
 
@@ -88,8 +90,11 @@ func (r *RamCache) AddCompany(companyName string, maxUsers uint, ttl time.Durati
 	if ok {
 		return errors.New(ErrCompanyAE)
 	}
+	if len(companyName) > MaxCharLength {
+		return errors.New(ErrCharMaxLength)
+	}
 	r.mu.Lock()
-	r.users[companyName] = newClientHub(maxUsers, ttl, r.wr, r.p)
+	r.users[companyName] = newClientHub(maxUsers, ttl)
 	r.mu.Unlock()
 	return nil
 }
@@ -106,21 +111,29 @@ func (r *RamCache) GetCompany(name string) (*ClientHub, error) {
 	}
 	return c, nil
 }
-func (r *RamCache) DeleteCompany(companyName string) {
+func (r *RamCache) DeleteCompany(companyName string) error {
+	_, ok := r.getCompany(companyName)
+	if !ok {
+		return errors.New(ErrCompanyDE)
+	}
 	r.mu.Lock()
 	delete(r.users, companyName)
 	r.mu.Unlock()
+	return nil
 }
 func (r *RamCache) AddClient(companyName string, client *Client) (error, deleteClientFn) {
 	company, ok := r.getCompany(companyName)
 	if !ok || company.IsExpired() {
 		return errors.New(ErrCompanyDE), nil
 	}
+	if len(client.UserId) > MaxCharLength {
+		return errors.New(ErrCharMaxLength), nil
+	}
 	err := company.addClient(client)
 	closeAndDel := func() error {
-		var err error
-		err = client.Disconnect()
-		err = r.deleteClient(companyName, client.UserId)
+		//var err error
+		//err = client.Disconnect()
+		err := r.deleteClient(companyName, client.UserId)
 		client = nil
 		return err
 	}
@@ -149,19 +162,3 @@ func (r *RamCache) GetActiveUsers(companyName string) (uint, error) {
 	return uint(c.GetNumActiveUsers()), nil
 }
 
-// func (r *RamCache) DeleteOfflineClients() {
-// 	r.mu.RLock()
-// 	for companyName, clientHub := range r.users {
-// 		allUSers := clientHub.GetUsers()
-// 		for _, cl := range allUSers {
-// 			if cl.Connection.IsClosed() {
-// 				r.mu.Lock()
-// 				if err := r.users[companyName].DeleteClient(cl.UserId); err != nil {
-// 					r.mu.Unlock()
-// 					continue
-// 				}
-// 				r.mu.Unlock()
-// 			}
-// 		}
-// 	}
-// }

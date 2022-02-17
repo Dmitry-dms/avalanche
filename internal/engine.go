@@ -255,7 +255,7 @@ func (e *Engine) Handle(conn net.Conn) {
 	cachedMessages, length := e.Redis.sGetMembers(context.TODO(), userId)
 
 
-	client := NewClient(transport, userId, readDescriptor)
+	client := NewClient(transport, userId)
 	err, deleteFn := e.Subs.AddClient(companyName, client)
 	if err != nil {
 		e.Logger.Info().Err(err)

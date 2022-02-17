@@ -2,21 +2,18 @@ package internal
 
 import (
 	"github.com/Dmitry-dms/avalanche/pkg/websocket"
-	"github.com/mailru/easygo/netpoll"
 )
 
 type Client struct {
 	UserId            string
 	Connection        websocket.Websocket
-	Desc              *netpoll.Desc
 }
 type CloseFunc func() error
 
-func NewClient(transport websocket.Websocket, userId string, desc *netpoll.Desc) *Client {
+func NewClient(transport websocket.Websocket, userId string) *Client {
 	return &Client{
 		Connection:        transport,
 		UserId:            userId,
-		Desc:              desc,
 	}
 }
 

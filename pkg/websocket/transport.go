@@ -78,7 +78,7 @@ func (t CustomWebsocket) Close() error {
 	// }
 	// t.closed = true
 	//close(t.closeCh)
-	// data := ws.NewCloseFrameBody(ws.StatusNormalClosure, "closing connection")
-	// _ = wsutil.WriteServerMessage(t.conn, ws.OpClose, data)
+	data := ws.NewCloseFrameBody(ws.StatusNormalClosure, "closing connection")
+	_ = wsutil.WriteServerMessage(t.conn, ws.OpClose, data)
 	return t.conn.Close()
 }

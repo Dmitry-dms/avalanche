@@ -111,17 +111,10 @@ func main() {
 		zerolg.Fatal().Err(err).Msg("error create netpoll")
 	}
 
-	writeFunc := func(msg internal.Message) {
-		msg.Client.Connection.Write(msg.Msg)
-	}
-
-	//infoLog := log.New(os.Stdout, "INFO\t", log.Ldate|log.Ltime)
-
-	cache := internal.NewRamCache(writeFunc, poller)
+	cache := internal.NewRamCache()
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		zerolg.Fatal().Err(err).Msgf("Can't start listening on port %s", addr)
-		//log.Fatalf("listen %q error: %v", addr, err)
 	}
 
 	poolConnection := pool.NewPool(128, 20, 3)
@@ -136,6 +129,7 @@ func main() {
 		zerolg.Debug().Err(err).Msg("unable to find any company")
 		engine.Subs.AddCompany("test", 100000, time.Hour*12)
 	}
+	//engine.Subs.AddCompany("test2", 100000, time.Second*30)
 
 	//log.Printf("listening %s (%q)", ln.Addr(), addr)
 
