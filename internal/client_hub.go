@@ -89,9 +89,7 @@ func (c *ClientHub) addClient(client *Client) error {
 	return nil
 }
 func (c *ClientHub) verifyClient(userId string) bool {
-	//c.mu.RLock()
 	_, ok := c.get(userId)
-	//c.mu.RUnlock()
 	return ok
 }
 func (c *ClientHub) deleteClient(userId string) error {

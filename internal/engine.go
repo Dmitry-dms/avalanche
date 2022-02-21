@@ -27,11 +27,18 @@ import (
 	"github.com/gobwas/ws"
 )
 
+// Engine struct is a core of Avalanche websocket server.
+// It contains all the logic for working with websockets, RAM cache, redis, logging.
 type Engine struct {
+	
 	Context          context.Context
+	// Conf contains the main configuration.
 	Conf             Config
+	// Logger is an implementaion of zerolog library.
 	Logger           *zerolog.Logger
+	// Subs is an implementation of RAM cache.
 	Subs             Cache
+	// Server is used for accepting and upgrading connection.
 	Server           net.Listener
 	PoolConnection   *pool.Pool
 	PoolCommands     *pool.Pool
@@ -40,13 +47,13 @@ type Engine struct {
 	RedisMsgSub      *redis.PubSub
 	RedisSendInfo    func(payload []byte) error
 	RedisCommandsSub *redis.PubSub
-	Serializer       serializer.AvalancheSerializer
+	Serializer       serializer.Serializer
 	AuthManager      *auth.Manager
 }
 
 func NewEngine(ctx context.Context, config Config, logger *zerolog.Logger, cache Cache,
 	conn net.Listener, poolConn *pool.Pool, poolComm *pool.Pool,
-	poller netpoll.Poller, s serializer.AvalancheSerializer) (*Engine, error) {
+	poller netpoll.Poller, s serializer.Serializer) (*Engine, error) {
 
 	red := InitRedis(config.RedisAddress)
 
@@ -87,25 +94,6 @@ func NewEngine(ctx context.Context, config Config, logger *zerolog.Logger, cache
 	return engine, nil
 }
 
-type redisMessage struct {
-	CompanyName string `json:"company_name"`
-	ClientId    string `json:"client_id"`
-	Message     string `json:"message"`
-} //"{\"company_name\":\"testing\",\"client_id\":\"4\",\"message\":\"10\"}"
-type AddCompanyMessage struct {
-	CompanyName string `json:"company_name"`
-	MaxUsers    uint   `json:"max_users"`
-	Duration    int    `json:"duration_hour"`
-} //"{\"company_name\":\"testing\",\"max_users\":1000,\"duration_hour\":10}"
-type CompanyToken struct {
-	Token      string `json:"token"`
-	ServerName string `json:"server_name"`
-	Duration   int    `json:"duration_hour"`
-}
-type AddCompanyResponse struct {
-	Token       CompanyToken `json:"company_token"`
-	CompanyName string       `json:"company_name"`
-}
 
 func (e *Engine) startupMessage(msg []byte) error {
 	return e.RedisSendInfo(msg)
@@ -114,7 +102,7 @@ func (e *Engine) listeningCommands() {
 	for s := range e.RedisCommandsSub.Channel() {
 		e.PoolCommands.Schedule(func() {
 			var c AddCompanyMessage
-			err := e.Serializer.Deserialize([]byte(s.Payload), &c)
+			err := e.Serializer.Unmarshal([]byte(s.Payload), &c)
 			if err != nil {
 				e.Logger.Warn().Err(err)
 				return
@@ -147,7 +135,7 @@ func (e *Engine) listeningCommands() {
 }
 
 func (e *Engine) serializeAndSend(v interface{}) error {
-	payload, err := e.Serializer.Serialize(v)
+	payload, err := e.Serializer.Marshal(v)
 	if err != nil {
 		e.Logger.Warn().Err(err)
 		return err
@@ -182,7 +170,7 @@ func (e *Engine) startRedisListen() {
 	for msg := range e.RedisMsgSub.Channel() {
 		e.PoolCommands.Schedule(func() {
 			var m redisMessage
-			err := e.Serializer.Deserialize([]byte(msg.Payload), &m)
+			err := e.Serializer.Unmarshal([]byte(msg.Payload), &m)
 			if err != nil {
 				e.Logger.Warn().Err(err)
 				return // TODO: Handle error
@@ -247,27 +235,23 @@ func (e *Engine) Handle(conn net.Conn) {
 		return
 	}
 
-	//var client *Client
 	transport := websocket.NewWebsocketTransport(conn)
 
-	readDescriptor, _ := netpoll.Handle(conn, netpoll.EventRead) //netpoll.Must(netpoll.HandleRead(conn))
+	readDescriptor, _ := netpoll.Handle(conn, netpoll.EventRead) 
 
 	cachedMessages, length := e.Redis.sGetMembers(context.TODO(), userId)
 
 
 	client := NewClient(transport, userId)
-	err, deleteFn := e.Subs.AddClient(companyName, client)
+	err, deleteClient := e.Subs.AddClient(companyName, client)
 	if err != nil {
 		e.Logger.Info().Err(err)
-		conn.Write([]byte("User already exists"))
+		conn.Write([]byte("user already exists"))
 		conn.Close()
 		return
 	}
-	closeAndDel := func(cl *Client) {
-		e.Logger.Info().Msgf("user with id={%s} was disconnected\n", client.UserId)
-		deleteFn()
-	}
-	e.Logger.Info().Msgf("user connected with id={%s} and {%s}\n", client.UserId, companyName)
+
+	e.Logger.Debug().Msgf("user connected with id={%s} and {%s}", client.UserId, companyName)
 
 	if length > 0 {
 		e.PoolCommands.Schedule(func() {
@@ -278,44 +262,13 @@ func (e *Engine) Handle(conn net.Conn) {
 		})
 	}
 
-	// go func() {
-	// write:
-	// 	for {
-	// 		select {
-	// 		case <-client.Connection.CloseCh():
-	// 			//deleteFn()
-	// 			break write
-	// 		case <-client.Connection.Timer.C:
-	// 			fmt.Println("timer has expired")
-	// 			client.Connection.Close()
-
-	// 			break write
-
-	// 		case msg := <-client.MessageChan:
-	// 			e.PoolCommands.Schedule(func() {
-	// 				if err := client.HandleWrite([]byte(msg), ws.OpText); err != nil {
-	// 					//e.Logger.Printf("User with id={%s} was disconnected\n", client.UserId)
-	// 					//deleteFn()
-	// 					//client.Connection.Close()
-
-	// 				} else {
-	// 					e.Logger.Printf("Message was send to user={%s}\n", client.UserId)
-	// 				}
-	// 			})
-	// 		//default:
-	// 		}
-	// 	}
-
-	//  }()
-
-	//})
-	//})
+	// Start a goroutine to let GC collect unnecessary data
 	go func() {
 		_ = e.Poller.Start(readDescriptor, func(ev netpoll.Event) {
 
 			if ev&(netpoll.EventReadHup|netpoll.EventHup) != 0 {
 				_ = e.Poller.Stop(readDescriptor)
-				closeAndDel(client)
+				deleteClient()
 				e.Logger.Info().Msgf("user with id={%s} was disconnected", client.UserId)
 				e.Logger.Debug().Msg(ev.String())
 				return
@@ -342,7 +295,7 @@ func (e *Engine) Handle(conn net.Conn) {
 
 func (e *Engine) SaveState() error {
 	stats := e.Subs.GetStatisctics()
-	data, err := e.Serializer.Serialize(&stats)
+	data, err := e.Serializer.Marshal(&stats)
 	if err != nil {
 		return err
 	}
@@ -357,7 +310,7 @@ func (e *Engine) RestoreState() error {
 		return errors.New("key doesn't exists")
 	}
 	var stats []CompanyStats
-	err = e.Serializer.Deserialize([]byte(val), &stats)
+	err = e.Serializer.Unmarshal([]byte(val), &stats)
 	if err != nil {
 		return err
 	}

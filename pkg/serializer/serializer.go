@@ -1,7 +1,7 @@
 package serializer
 
 
-type AvalancheSerializer interface {
-	Serialize(v interface{}) ([]byte,error)
-	Deserialize(msg []byte, v interface{}) error
+type Serializer interface {
+	Marshal(v interface{}) ([]byte,error)
+	Unmarshal(msg []byte, v interface{}) error
 }

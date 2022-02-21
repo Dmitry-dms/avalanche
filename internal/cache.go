@@ -43,19 +43,7 @@ func NewRamCache() *RamCache {
 	}
 }
 
-type CompanyStats struct {
-	Name        string        `json:"company_name"`
-	OnlineUsers uint          `json:"online_users"`
-	MaxUsers    uint          `json:"max_users"`
-	Users       []ClientStat  `json:"active_users"`
-	TTL         time.Duration `json:"ttl"`
-	Time        time.Time     `json:"time"`
-	Stopped     time.Time     `json:"stoped_time"`
-	Expired     bool          `json:"expired"`
-}
-type ClientStat struct {
-	UserId string `json:"user_id"`
-}
+
 
 func (r *RamCache) SendMessage(msg Message, companyName string) {
 	hub, _ := r.GetCompany(companyName)
@@ -131,8 +119,6 @@ func (r *RamCache) AddClient(companyName string, client *Client) (error, deleteC
 	}
 	err := company.addClient(client)
 	closeAndDel := func() error {
-		//var err error
-		//err = client.Disconnect()
 		err := r.deleteClient(companyName, client.UserId)
 		client = nil
 		return err
