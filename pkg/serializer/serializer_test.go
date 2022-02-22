@@ -6,7 +6,6 @@ import (
 
 	j "github.com/Dmitry-dms/avalanche/pkg/serializer/easyjson"
 	"github.com/Dmitry-dms/avalanche/pkg/serializer/json"
-
 )
 
 var (
@@ -91,3 +90,4 @@ func BenchmarkJsonDeserialize(b *testing.B) {
 		}
 	}
 }
+

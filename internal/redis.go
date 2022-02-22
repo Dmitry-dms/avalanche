@@ -7,10 +7,12 @@ import (
 	"github.com/go-redis/redis/v8"
 )
 
+// Redis is a struct that contains all the methods for working with Redis.
 type Redis struct {
 	Client *redis.Client
 }
 
+// InitRedis creates Redis object.
 func InitRedis(address string) *Redis {
 	r := redis.NewClient(&redis.Options{
 		Addr:     address,
@@ -19,6 +21,7 @@ func InitRedis(address string) *Redis {
 	})
 	return &Redis{Client: r}
 }
+
 
 func (r *Redis) publish(ctx context.Context, channel string, payload []byte) error {
 	return r.Client.Publish(ctx, channel, payload).Err()
@@ -38,6 +41,7 @@ func (r *Redis) getV(ctx context.Context, k string) (string, error) {
 func (r *Redis) sAdd(ctx context.Context, k string, vals ...interface{}) {
 	r.Client.SAdd(ctx, k, vals)
 }
+// sGetMembers looks for any cached messages the Client has.
 func (r *Redis) sGetMembers(ctx context.Context, k string) ([]string, int) {
 	res, err := r.Client.SMembers(ctx, k).Result()
 	if err != nil {

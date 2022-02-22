@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"os/signal"
 	"runtime"
 	"strconv"
@@ -27,11 +28,6 @@ import (
 	"github.com/mailru/easygo/netpoll"
 )
 
-// TODO:
-
-// 2. Log to file
-
-// 4. Accept simultaneous connections without crash
 
 var (
 	s     = new(http.Server)
@@ -40,14 +36,14 @@ var (
 )
 
 func printMemUsage() {
-	// runtime.GC()
-	// var m runtime.MemStats
-	// runtime.ReadMemStats(&m)
-	// fmt.Printf("Alloc = %v MiB", bToMb(m.Alloc))
-	// fmt.Printf("\tTotalAlloc = %v MiB", bToMb(m.TotalAlloc))
-	// fmt.Printf("\tStackInuse = %v MiB", bToMb(m.StackInuse))
-	// fmt.Printf("\tSys = %v MiB", bToMb(m.Sys))
-	// fmt.Printf("\tNumGC = %v\n", m.NumGC)
+	runtime.GC()
+	var m runtime.MemStats
+	runtime.ReadMemStats(&m)
+	fmt.Printf("Alloc = %v MiB", bToMb(m.Alloc))
+	fmt.Printf("\tTotalAlloc = %v MiB", bToMb(m.TotalAlloc))
+	fmt.Printf("\tStackInuse = %v MiB", bToMb(m.StackInuse))
+	fmt.Printf("\tSys = %v MiB", bToMb(m.Sys))
+	fmt.Printf("\tNumGC = %v\n", m.NumGC)
 }
 
 func bToMb(b uint64) uint64 {
@@ -75,18 +71,19 @@ func NewConsole(isDebug bool) *zerolog.Logger {
 // 	prometheus.MustRegister(getWsCounter)
 // }
 func main() {
-	//runtime.GOMAXPROCS(4)
 
-	// go func() {
-	// 	for {
-	// 		time.Sleep(10 * time.Second)
-	// 		printMemUsage()
-	// 	}
-	// }()
+	go func() {
+		for {
+			time.Sleep(30 * time.Second)
+			printMemUsage()
+		}
+	}()
 	// profiler.Start(profiler.Config{
 	// 	ApplicationName: "avalanche",
 	// 	ServerAddress:   "http://host.docker.internal:4040",
 	// })
+
+	// loads config from .env file.
 	err := godotenv.Load()
 	if err != nil {
 		log.Fatal("Error loading .env file")
@@ -94,16 +91,20 @@ func main() {
 	addr := os.Getenv("WS_PORT")
 	maxConn, _ := strconv.Atoi(os.Getenv("MAX_CONNECTIONS"))
 	maxUserMsg, _ := strconv.Atoi(os.Getenv("MAX_USERS_MESSAGES"))
+	statsIntervalSeconds, _ := strconv.Atoi(os.Getenv("SEND_STATS_USERS_SECOND"))
+
 	config := internal.Config{
-		Name:                os.Getenv("NAME"),
-		Version:             os.Getenv("VERSION"),
-		MaxConnections:      maxConn,
-		AuthJWTkey:          os.Getenv("JWT_SECRET"),
-		RedisAddress:        os.Getenv("REDIS_ADDRESS"),
-		RedisCommandsPrefix: os.Getenv("REDIS_COMMAND_PREFIX"),
-		RedisMsgPrefix:      os.Getenv("REDIS_MSG_PREFIX"),
-		RedisInfoPrefix:     os.Getenv("REDIS_INFO_PREFIX"),
-		MaxUserMessages:     maxUserMsg,
+		Address:               addr,
+		Name:                  os.Getenv("NAME"),
+		Version:               os.Getenv("VERSION"),
+		MaxConnections:        maxConn,
+		AuthJWTkey:            os.Getenv("JWT_SECRET"),
+		RedisAddress:          os.Getenv("REDIS_ADDRESS"),
+		RedisCommandsPrefix:   os.Getenv("REDIS_COMMAND_PREFIX"),
+		RedisMsgPrefix:        os.Getenv("REDIS_MSG_PREFIX"),
+		RedisInfoPrefix:       os.Getenv("REDIS_INFO_PREFIX"),
+		SendStatisticInterval: statsIntervalSeconds,
+		MaxUserMessages:       maxUserMsg,
 	}
 	zerolg := NewConsole(true)
 	poller, err := netpoll.New(nil)
@@ -134,26 +135,23 @@ func main() {
 	//log.Printf("listening %s (%q)", ln.Addr(), addr)
 
 	acceptDesc := netpoll.Must(netpoll.HandleListener(ln, netpoll.EventRead|netpoll.EventOneShot))
-	//accept := make(chan error, 1)
 
 	_ = engine.Poller.Start(acceptDesc, func(e netpoll.Event) {
 
 		engine.PoolConnection.Schedule(func() {
-			//go func() {
-			//for {
+			
 			conn, err := ln.Accept()
-			//go func(conn net.Conn, err error) {
+			
 			if err != nil {
+				zerolg.Fatal().Err(err)
 				if ne, ok := err.(net.Error); ok && ne.Temporary() {
-
-					goto cooldown
+					//goto cooldown
 				}
-				log.Fatalf("accept error: %v", err)
-			cooldown:
-				delay := 5 * time.Millisecond
-				log.Printf("accept error: %v; retrying in %s", err, delay)
-				time.Sleep(delay)
-				//return
+			// 	log.Fatalf("accept error: %v", err)
+			// cooldown:
+			// 	delay := 5 * time.Millisecond
+			// 	log.Printf("accept error: %v; retrying in %s", err, delay)
+			// 	time.Sleep(delay)
 			}
 
 			go engine.Handle(conn)

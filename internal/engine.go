@@ -1,9 +1,9 @@
 package internal
 
 import (
-	"bufio"
+
 	"context"
-	"os"
+
 	"strings"
 
 	"fmt"
@@ -28,31 +28,43 @@ import (
 )
 
 // Engine struct is a core of Avalanche websocket server.
-// It contains all the logic for working with websockets, RAM cache, redis, logging.
+// It contains all the logic for working with websockets, RAM cache, Redis, logging.
 type Engine struct {
-	
-	Context          context.Context
+	Context context.Context
 	// Conf contains the main configuration.
-	Conf             Config
+	Conf Config
 	// Logger is an implementaion of zerolog library.
-	Logger           *zerolog.Logger
-	// Subs is an implementation of RAM cache.
-	Subs             Cache
-	// Server is used for accepting and upgrading connection.
-	Server           net.Listener
-	PoolConnection   *pool.Pool
-	PoolCommands     *pool.Pool
-	Poller           netpoll.Poller
-	Redis            *Redis
-	RedisMsgSub      *redis.PubSub
-	RedisSendInfo    func(payload []byte) error
+	Logger *zerolog.Logger
+	// Subs is an implementation of Cache interface.
+	// Used for creating Hubs where users are held.
+	Subs Cache
+	// Server is used for exposing pprof handlers.
+	Server net.Listener
+	// PoolConnection is a goroutine pool which helps with accepting many connections at once.
+	PoolConnection *pool.Pool
+	// PoolCommands reduces the creation of a large number of goroutines when working with
+	// serialization/deserialization, receiving messages from Redis.
+	PoolCommands *pool.Pool
+	// Poller is an implementation of Linux epoll.
+	Poller netpoll.Poller
+	Redis  *Redis
+	// Redis Message Subscribe is a subscribe to a redis channel where messages are sent.
+	RedisMsgSub *redis.PubSub
+	// Redis Send Info is a defined func to send messages to Redis.
+	RedisSendInfo func(payload []byte) error
+	// Redis Command Subscribe is a subscribe to a redis channel where
+	// command messages such as CreateCompany are sent.
 	RedisCommandsSub *redis.PubSub
-	Serializer       serializer.Serializer
-	AuthManager      *auth.Manager
+	// Serializer is an implementation of Serializer interface.
+	// Used for serializing/deserializng messages between Avalanche and Redis.
+	Serializer serializer.Serializer
+	// AuthManager used for manipulating with JWT.
+	AuthManager *auth.Manager
 }
 
+// NewEngine creates a core of Avalanche websocket server and starts to connect to Redis.
 func NewEngine(ctx context.Context, config Config, logger *zerolog.Logger, cache Cache,
-	conn net.Listener, poolConn *pool.Pool, poolComm *pool.Pool,
+	conn net.Listener, poolConn, poolComm *pool.Pool,
 	poller netpoll.Poller, s serializer.Serializer) (*Engine, error) {
 
 	red := InitRedis(config.RedisAddress)
@@ -84,20 +96,20 @@ func NewEngine(ctx context.Context, config Config, logger *zerolog.Logger, cache
 		Redis:            red,
 	}
 	if err := red.ping(); err != nil {
-		engine.Logger.Fatal().Err(err).Msg("can't' connect to redis")
+		engine.Logger.Fatal().Err(err).Msg("can't connect to redis")
 	}
 
 	go engine.startRedisListen()
 	go engine.sendStatisticAboutUsers()
 	go engine.listeningCommands()
-	engine.startupMessage([]byte(fmt.Sprintf("WS server: {%s} {%s} succesfully connected to hub", config.Name, config.Version)))
+	engine.startupMessage([]byte(fmt.Sprintf("WS server: {%s} {%s} succesfully connected to hub. Address = %s", config.Name, config.Version, config.Address)))
 	return engine, nil
 }
-
 
 func (e *Engine) startupMessage(msg []byte) error {
 	return e.RedisSendInfo(msg)
 }
+// listeningCommands accepts command messages from Redis.
 func (e *Engine) listeningCommands() {
 	for s := range e.RedisCommandsSub.Channel() {
 		e.PoolCommands.Schedule(func() {
@@ -134,6 +146,7 @@ func (e *Engine) listeningCommands() {
 	}
 }
 
+// serializeAndSend is a helper function which serializes message and sends to Redis.
 func (e *Engine) serializeAndSend(v interface{}) error {
 	payload, err := e.Serializer.Marshal(v)
 	if err != nil {
@@ -147,8 +160,9 @@ func (e *Engine) serializeAndSend(v interface{}) error {
 	}
 	return nil
 }
+// sendStatisticAboutUsers sends information about all users to Redis.
 func (e *Engine) sendStatisticAboutUsers() {
-	ticker := time.NewTicker(time.Second * 10)
+	ticker := time.NewTicker(time.Second * time.Duration(e.Conf.SendStatisticInterval))
 	defer ticker.Stop()
 	for range ticker.C {
 		e.PoolCommands.Schedule(func() {
@@ -164,6 +178,7 @@ func (e *Engine) sendStatisticAboutUsers() {
 		})
 	}
 }
+// startRedisListen starts listen to Redis Message channel.
 func (e *Engine) startRedisListen() {
 	e.Logger.Info().Msg("redis listener was started")
 
@@ -173,9 +188,10 @@ func (e *Engine) startRedisListen() {
 			err := e.Serializer.Unmarshal([]byte(msg.Payload), &m)
 			if err != nil {
 				e.Logger.Warn().Err(err)
-				return // TODO: Handle error
+				return 
 			}
 			client, isOnline := e.Subs.GetClient(m.CompanyName, m.ClientId)
+			// if user is offline check if there is free space to store messages
 			if !isOnline {
 				_, length := e.Redis.sGetMembers(context.TODO(), m.ClientId)
 				if length > int(e.Conf.MaxUserMessages) {
@@ -185,29 +201,30 @@ func (e *Engine) startRedisListen() {
 				}
 				return
 			}
-			e.Logger.Printf("Message {%s} to client {%s} with company id {%s}", m.Message, m.ClientId, m.CompanyName)
+			e.Logger.Debug().Msgf("Message {%s} to client {%s} with company id {%s}", m.Message, m.ClientId, m.CompanyName)
 			e.sendMsg(Message{client, []byte(msg.Payload)}, m.CompanyName)
 		})
 	}
 }
 
-func (c *Client) HandleWrite(msg []byte, msgType ws.OpCode) error {
-	// if c.Connection.IsClosed() {
-	// 	return errors.New("connection was closed")
-	// }
-	err := c.Connection.Write(msg)
-	if err != nil {
-		return err
-	}
-	return nil
-}
+// func (c *Client) HandleWrite(msg []byte, msgType ws.OpCode) error {
+// 	err := c.Connection.Write(msg)
+// 	if err != nil {
+// 		return err
+// 	}
+// 	return nil
+// }
+
+// HandleRead is a wrapper of connection Read function.
 func (e *Engine) HandleRead(c *Client) ([]byte, bool, error) {
 	payload, isControl, err := c.Connection.Read()
 	if err != nil {
-		return nil, isControl, errors.Wrap(err, "handle read error")
+		return nil, isControl, errors.Wrap(err, "HandleRead error")
 	}
 	return payload, isControl, nil
 }
+// Handle is a function that upgrades the websocket connection,
+// creates a client, fires a poller for listening messages from client.
 func (e *Engine) Handle(conn net.Conn) {
 	var userId, companyName string
 	u := ws.Upgrader{
@@ -237,10 +254,9 @@ func (e *Engine) Handle(conn net.Conn) {
 
 	transport := websocket.NewWebsocketTransport(conn)
 
-	readDescriptor, _ := netpoll.Handle(conn, netpoll.EventRead) 
+	readDescriptor, _ := netpoll.Handle(conn, netpoll.EventRead)
 
 	cachedMessages, length := e.Redis.sGetMembers(context.TODO(), userId)
-
 
 	client := NewClient(transport, userId)
 	err, deleteClient := e.Subs.AddClient(companyName, client)
@@ -251,7 +267,7 @@ func (e *Engine) Handle(conn net.Conn) {
 		return
 	}
 
-	e.Logger.Debug().Msgf("user connected with id={%s} and {%s}", client.UserId, companyName)
+	e.Logger.Debug().Msgf("user connected with id={%s} and company={%s}", client.UserId, companyName)
 
 	if length > 0 {
 		e.PoolCommands.Schedule(func() {
@@ -280,9 +296,9 @@ func (e *Engine) Handle(conn net.Conn) {
 				return
 			} else {
 				if !isControl {
-					if string(payload) == "test" {
-						client.HandleWrite([]byte{}, ws.OpPing)
-					}
+					// if string(payload) == "test" {
+					// 	client.HandleWrite([]byte{}, ws.OpPing)
+					// }
 					e.sendMsg(Message{Client: client, Msg: []byte(strings.ToUpper(string(payload)))}, companyName)
 					e.Logger.Printf("Message from user={%s}: {%s}\n", client.UserId, payload)
 				}
@@ -293,6 +309,7 @@ func (e *Engine) Handle(conn net.Conn) {
 
 }
 
+// SaveState saves the state of active CompanyHubs.
 func (e *Engine) SaveState() error {
 	stats := e.Subs.GetStatisctics()
 	data, err := e.Serializer.Marshal(&stats)
@@ -303,6 +320,7 @@ func (e *Engine) SaveState() error {
 	return e.Redis.setKV(ctx, "save", data, 0)
 }
 
+// RestoreState restores the state of active CompanyHubs after restart.
 func (e *Engine) RestoreState() error {
 	ctx := context.TODO()
 	val, err := e.Redis.getV(ctx, "save")
@@ -326,33 +344,15 @@ func (e *Engine) RestoreState() error {
 	return nil
 }
 
-func (e *Engine) listenCommands() {
-	for {
-		command, _ := bufio.NewReader(os.Stdin).ReadString('\n')
-		switch {
-		case command == "help":
-			fmt.Println("There will be help info")
-			// case command[:4] == "add":
-			// 	splited := strings.Split(command, " ")
-			// 	if len(splited) > 3 {
-			// 		fmt.Println("Wrong add command")
-			// 	} else {
 
-			// 	}
-		}
-	}
-}
 
 func (e *Engine) GetActiveUsers(w http.ResponseWriter, r *http.Request) {
 	users, _ := e.Subs.GetActiveUsers("test")
 	_, _ = w.Write([]byte(fmt.Sprintf("%d", users)))
 	e.Logger.Printf("Active users = %d", users)
 }
+// sendMsg is a helper function that allows you to send messages to the Client.
 func (e *Engine) sendMsg(msg Message, compName string) bool {
-
-	// if client.MessageChan == nil {
-	// 	return false
-	// }
 	e.Subs.SendMessage(msg, compName)
 	//client.MessageChan <- msg
 	//client.HandleWrite([]byte(msg), ws.OpText)
