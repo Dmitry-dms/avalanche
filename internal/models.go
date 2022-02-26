@@ -43,6 +43,11 @@ type CompanyStats struct {
 	Stopped     time.Time     `json:"stoped_time"`
 	Expired     bool          `json:"expired"`
 }
+// CompanyStatsWrapper was created because []CompanyStats doesn't 
+// implement easyjson.Marshaler/Unmarshaler interface
+type CompanyStatsWrapper struct {
+	Stats []CompanyStats `json:"stats"`
+}
 type ClientStat struct {
 	UserId string `json:"user_id"`
 }

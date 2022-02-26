@@ -1,8 +1,8 @@
 .SILENT:
 
-WS_PORT=localhost:8000
+WS_PORT=8000
 MONITORING_PORT=8090
-NUM_CONNECT=1000
+NUM_CONNECT=10000
 
 r:
 	go run cmd/main.go
@@ -11,13 +11,8 @@ cl:
 c:
 	go run test3-client-gorilla/main.go
 run:
-	
 	# docker run -d --name=pyro -p 4040:4040 pyroscope/pyroscope server
-	
 	docker run  -d --name=ava -p ${WS_PORT}:8000 -p ${MONITORING_PORT}:8090 avalanche
-	# docker run -d --rm --name=test1 --ulimit nofile=100000:100009  test
-	#docker run -d --name=test2 --ulimit nofile=100000:100009  test
-	# docker run -d --name=test3 --ulimit nofile=100000:100009  test
 graph:
 	docker run -d -p 9090:9090 prom/prometheus
 	docker run -d --name=grafana -p 3000:3000 grafana/grafana	
@@ -42,7 +37,7 @@ build:
 	docker rmi avalanche
 	docker build -t avalanche:latest .
 	make run
-	make cl
+	#make cl
 build1:
 	docker build -t avalanche:latest .
 	

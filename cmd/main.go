@@ -16,18 +16,21 @@ import (
 	"time"
 
 	"github.com/Dmitry-dms/avalanche/internal"
+	"github.com/Dmitry-dms/avalanche/pkg/msg_controllers/redis"
 	"github.com/Dmitry-dms/avalanche/pkg/pool"
-	"github.com/Dmitry-dms/avalanche/pkg/serializer/json"
+	"github.com/Dmitry-dms/avalanche/pkg/serializer/easyjson"
+	"github.com/pkg/errors"
+
+	//"github.com/Dmitry-dms/avalanche/pkg/serializer/json"
 	"github.com/arl/statsviz"
 	"github.com/joho/godotenv"
 
 	//"github.com/prometheus/client_golang/prometheus"
-	//"github.com/prometheus/client_golang/prometheus/promhttp"
+	//	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/rs/zerolog"
 
 	"github.com/mailru/easygo/netpoll"
 )
-
 
 var (
 	s     = new(http.Server)
@@ -59,17 +62,47 @@ func NewConsole(isDebug bool) *zerolog.Logger {
 	return &logger
 }
 
-// var getWsCounter = prometheus.NewCounterVec(
-// 	prometheus.CounterOpts{
-// 		Name: "ws_request_connect", // metric name
-// 		Help: "Number of ws_connects request.",
-// 	},
-// 	[]string{"status"}, // labels
-// )
-// func init() {
-//     // must register counter on init
-// 	prometheus.MustRegister(getWsCounter)
-// }
+func ParseConfig() (*internal.Config, error) {
+	// loads config from .env file.
+	err := godotenv.Load()
+	if err != nil {
+		return nil, errors.Wrap(err, "ParseConfig")
+	}
+	var errAtoi error
+	addr := os.Getenv("WS_PORT")
+	maxConn, errAtoi := strconv.Atoi(os.Getenv("MAX_CONNECTIONS"))
+	if errAtoi != nil {
+		errors.Wrap(errAtoi, "parse max_connection")
+	}
+	maxUserMsg, errAtoi := strconv.Atoi(os.Getenv("MAX_USERS_MESSAGES"))
+	if errAtoi != nil {
+		errors.Wrap(errAtoi, "parse max_users_messages")
+	}
+	statsIntervalSeconds, errAtoi := strconv.Atoi(os.Getenv("SEND_STATS_USERS_SECOND"))
+	if errAtoi != nil {
+		errors.Wrap(errAtoi, "parse max_users_messages")
+	}
+	if errAtoi != nil {
+		return nil, errAtoi
+	}
+
+	config := internal.Config{
+		Port:                  addr,
+		Name:                  os.Getenv("NAME"),
+		Version:               os.Getenv("VERSION"),
+		MaxConnections:        maxConn,
+		AuthJWTkey:            os.Getenv("JWT_SECRET"),
+		RedisAddress:          os.Getenv("REDIS_ADDRESS"),
+		RedisCommandsPrefix:   os.Getenv("REDIS_COMMAND_PREFIX"),
+		RedisMsgPrefix:        os.Getenv("REDIS_MSG_PREFIX"),
+		RedisInfoPrefix:       os.Getenv("REDIS_INFO_PREFIX"),
+		SendStatisticInterval: statsIntervalSeconds,
+		MaxUserMessages:       maxUserMsg,
+		MonitoringPort:        os.Getenv("MONITORING_PORT"),
+	}
+	return &config, nil
+}
+
 func main() {
 
 	go func() {
@@ -83,49 +116,33 @@ func main() {
 	// 	ServerAddress:   "http://host.docker.internal:4040",
 	// })
 
-	// loads config from .env file.
-	err := godotenv.Load()
-	if err != nil {
-		log.Fatal("Error loading .env file")
-	}
-	addr := os.Getenv("WS_PORT")
-	maxConn, _ := strconv.Atoi(os.Getenv("MAX_CONNECTIONS"))
-	maxUserMsg, _ := strconv.Atoi(os.Getenv("MAX_USERS_MESSAGES"))
-	statsIntervalSeconds, _ := strconv.Atoi(os.Getenv("SEND_STATS_USERS_SECOND"))
-
-	config := internal.Config{
-		Address:               addr,
-		Name:                  os.Getenv("NAME"),
-		Version:               os.Getenv("VERSION"),
-		MaxConnections:        maxConn,
-		AuthJWTkey:            os.Getenv("JWT_SECRET"),
-		RedisAddress:          os.Getenv("REDIS_ADDRESS"),
-		RedisCommandsPrefix:   os.Getenv("REDIS_COMMAND_PREFIX"),
-		RedisMsgPrefix:        os.Getenv("REDIS_MSG_PREFIX"),
-		RedisInfoPrefix:       os.Getenv("REDIS_INFO_PREFIX"),
-		SendStatisticInterval: statsIntervalSeconds,
-		MaxUserMessages:       maxUserMsg,
-	}
 	zerolg := NewConsole(true)
+	config, err := ParseConfig()
+	if err != nil {
+		zerolg.Fatal().Err(errors.Unwrap(err))
+	}
+
 	poller, err := netpoll.New(nil)
 	if err != nil {
 		zerolg.Fatal().Err(err).Msg("error create netpoll")
 	}
-
 	cache := internal.NewRamCache()
-	ln, err := net.Listen("tcp", addr)
+	ln, err := net.Listen("tcp", ":"+config.Port)
 	if err != nil {
-		zerolg.Fatal().Err(err).Msgf("Can't start listening on port %s", addr)
+		zerolg.Fatal().Err(err).Msgf("Can't start listening on port %s", config.Port)
 	}
 
 	poolConnection := pool.NewPool(128, 20, 3)
 	poolCommands := pool.NewPool(50, 1, 3)
 
-	jsonSerializer := &json.CustomJsonSerializer{}
+	jsonSerializer := &easyjson.CustomEasyJson{}
 	ctx := context.Background()
-	engine, _ := internal.NewEngine(ctx, config, zerolg, cache, ln, poolConnection, poolCommands, poller, jsonSerializer)
+
+	red := redis.InitRedis(config.RedisAddress)
+	engine, _ := internal.NewEngine(ctx, *config, zerolg, cache, ln, poolConnection, poolCommands, poller, jsonSerializer, red)
 
 	err = engine.RestoreState()
+
 	if err != nil {
 		zerolg.Debug().Err(err).Msg("unable to find any company")
 		engine.Subs.AddCompany("test", 100000, time.Hour*12)
@@ -139,19 +156,19 @@ func main() {
 	_ = engine.Poller.Start(acceptDesc, func(e netpoll.Event) {
 
 		engine.PoolConnection.Schedule(func() {
-			
+
 			conn, err := ln.Accept()
-			
+
 			if err != nil {
 				zerolg.Fatal().Err(err)
 				if ne, ok := err.(net.Error); ok && ne.Temporary() {
 					//goto cooldown
 				}
-			// 	log.Fatalf("accept error: %v", err)
-			// cooldown:
-			// 	delay := 5 * time.Millisecond
-			// 	log.Printf("accept error: %v; retrying in %s", err, delay)
-			// 	time.Sleep(delay)
+				// 	log.Fatalf("accept error: %v", err)
+				// cooldown:
+				// 	delay := 5 * time.Millisecond
+				// 	log.Printf("accept error: %v; retrying in %s", err, delay)
+				// 	time.Sleep(delay)
 			}
 
 			go engine.Handle(conn)
@@ -162,7 +179,7 @@ func main() {
 	})
 
 	go func() {
-		port := os.Getenv("MONITORING_PORT")
+
 		mux := http.NewServeMux()
 		mux.HandleFunc("/p", func(w http.ResponseWriter, r *http.Request) {
 			pprof.Index(w, r)
@@ -175,19 +192,21 @@ func main() {
 		mux.Handle("/allocs", pprof.Handler("allocs"))
 		mux.Handle("/goroutine", pprof.Handler("goroutine"))
 		mux.HandleFunc("/a", mid(engine.GetActiveUsers))
-		log.Printf("run http server on %s", port)
-		if err := http.ListenAndServe(port, mux); err != nil {
-			zerolg.Fatal().Err(err).Msgf("Can't start monitoring on port %s", port)
+		log.Printf("run http server on %s", config.MonitoringPort)
+		if err := http.ListenAndServe(":"+config.MonitoringPort, mux); err != nil {
+			zerolg.Fatal().Err(err).Msgf("Can't start monitoring on port %s", config.MonitoringPort)
 		}
 	}()
 	signal.Notify(sig, syscall.SIGTERM, syscall.SIGINT)
 
 	select {
 	case sig := <-sig:
-		//const timeout = 5 * time.Second
 		zerolg.Info().Msgf("signal %q received; shutting down", sig)
-		engine.SaveState()
-		zerolg.Info().Msgf("successfully saved cache to redis")
+		if err := engine.SaveState(); err != nil {
+			zerolg.Warn().Err(err)
+		} else {
+			zerolg.Info().Msgf("cache was successfully saved to Storer")
+		}
 		ctx := context.Background()
 		if err := s.Shutdown(ctx); err != nil {
 			zerolg.Fatal().Err(err)

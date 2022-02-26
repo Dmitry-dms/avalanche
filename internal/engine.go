@@ -1,15 +1,12 @@
 package internal
 
 import (
-
 	"context"
 
 	"strings"
 
 	"fmt"
 	"time"
-
-	//"sync"
 
 	"net"
 	"net/http"
@@ -28,7 +25,7 @@ import (
 )
 
 // Engine struct is a core of Avalanche websocket server.
-// It contains all the logic for working with websockets, RAM cache, Redis, logging.
+// It contains all the logic for working with websockets, cache, message broker, logging.
 type Engine struct {
 	Context context.Context
 	// Conf contains the main configuration.
@@ -43,78 +40,76 @@ type Engine struct {
 	// PoolConnection is a goroutine pool which helps with accepting many connections at once.
 	PoolConnection *pool.Pool
 	// PoolCommands reduces the creation of a large number of goroutines when working with
-	// serialization/deserialization, receiving messages from Redis.
+	// serialization/deserialization, receiving messages from message broker.
 	PoolCommands *pool.Pool
 	// Poller is an implementation of Linux epoll.
 	Poller netpoll.Poller
-	Redis  *Redis
-	// Redis Message Subscribe is a subscribe to a redis channel where messages are sent.
-	RedisMsgSub *redis.PubSub
-	// Redis Send Info is a defined func to send messages to Redis.
-	RedisSendInfo func(payload []byte) error
-	// Redis Command Subscribe is a subscribe to a redis channel where
-	// command messages such as CreateCompany are sent.
-	RedisCommandsSub *redis.PubSub
+	// msgController is an implementation of MessageController interface.
+	// It can publish/subscribe to the channels of the message broker.
+	// It caches CompanyHub's state and messages to offline users on shutdown and restores on startup.
+	msgController MessageController
+
+	// SendInfoFunc is a defined func to send messages to the message broker.
+	SendInfoFunc func(payload []byte) error
+
 	// Serializer is an implementation of Serializer interface.
-	// Used for serializing/deserializng messages between Avalanche and Redis.
+	// Used for serializing/deserializng messages between Avalanche and message broker.
 	Serializer serializer.Serializer
 	// AuthManager used for manipulating with JWT.
 	AuthManager *auth.Manager
 }
 
-// NewEngine creates a core of Avalanche websocket server and starts to connect to Redis.
+// NewEngine creates a core of Avalanche websocket server and initiates connection to the message broker.
 func NewEngine(ctx context.Context, config Config, logger *zerolog.Logger, cache Cache,
 	conn net.Listener, poolConn, poolComm *pool.Pool,
-	poller netpoll.Poller, s serializer.Serializer) (*Engine, error) {
+	poller netpoll.Poller, s serializer.Serializer, msgController MessageController) (*Engine, error) {
 
-	red := InitRedis(config.RedisAddress)
-
-	redisInfo := func(payload []byte) error {
-		return red.publish(ctx, config.RedisInfoPrefix, payload) //+config.Name
+	sendInfoFunc := func(payload []byte) error {
+		return msgController.Publish(ctx, config.RedisInfoPrefix, payload) //+config.Name
 	}
 
-	redisMsg := red.subscribe(ctx, config.RedisMsgPrefix)       //+config.Name)
-	redisMain := red.subscribe(ctx, config.RedisCommandsPrefix) //+config.Name)
 	authManager, err := auth.NewManager(config.AuthJWTkey)
 	if err != nil {
 		return nil, err
 	}
 	engine := &Engine{
-		Context:          ctx,
-		Conf:             config,
-		Logger:           logger,
-		Subs:             cache,
-		Server:           conn,
-		PoolConnection:   poolConn,
-		PoolCommands:     poolComm,
-		Poller:           poller,
-		RedisMsgSub:      redisMsg,
-		RedisSendInfo:    redisInfo,
-		RedisCommandsSub: redisMain,
-		Serializer:       s,
-		AuthManager:      authManager,
-		Redis:            red,
+		Context:        ctx,
+		Conf:           config,
+		Logger:         logger,
+		Subs:           cache,
+		Server:         conn,
+		PoolConnection: poolConn,
+		PoolCommands:   poolComm,
+		Poller:         poller,
+		SendInfoFunc:   sendInfoFunc,
+		Serializer:     s,
+		AuthManager:    authManager,
+		msgController:  msgController,
 	}
-	if err := red.ping(); err != nil {
-		engine.Logger.Fatal().Err(err).Msg("can't connect to redis")
+	if err := msgController.Ping(); err != nil {
+		engine.Logger.Fatal().Err(err).Msg("can't connect to message broker")
 	}
+	commandsFunc := engine.listeningCommands()
+	go msgController.Subscribe(ctx, config.RedisCommandsPrefix, commandsFunc)
+	msgFunc := engine.startRedisListen()
+	go msgController.Subscribe(ctx, config.RedisMsgPrefix, msgFunc)
 
-	go engine.startRedisListen()
 	go engine.sendStatisticAboutUsers()
-	go engine.listeningCommands()
-	engine.startupMessage([]byte(fmt.Sprintf("WS server: {%s} {%s} succesfully connected to hub. Address = %s", config.Name, config.Version, config.Address)))
+
+	engine.startupMessage([]byte(fmt.Sprintf("WS server: {%s} {%s} succesfully connected to hub. Port = %s", config.Name, config.Version, config.Port)))
 	return engine, nil
 }
 
 func (e *Engine) startupMessage(msg []byte) error {
-	return e.RedisSendInfo(msg)
+	return e.SendInfoFunc(msg)
 }
-// listeningCommands accepts command messages from Redis.
-func (e *Engine) listeningCommands() {
-	for s := range e.RedisCommandsSub.Channel() {
+
+// listeningCommands creates a function that runs when a message arrives in the command channel.
+func (e *Engine) listeningCommands() func(msg string) {
+	f := func(msg string) {
 		e.PoolCommands.Schedule(func() {
 			var c AddCompanyMessage
-			err := e.Serializer.Unmarshal([]byte(s.Payload), &c)
+			err := e.Serializer.Unmarshal([]byte(msg), &c)
 			if err != nil {
 				e.Logger.Warn().Err(err)
 				return
@@ -144,67 +139,71 @@ func (e *Engine) listeningCommands() {
 			}
 		})
 	}
+	return f
 }
 
-// serializeAndSend is a helper function which serializes message and sends to Redis.
+// serializeAndSend is a helper function which serializes message and sends it to the Redis.
 func (e *Engine) serializeAndSend(v interface{}) error {
 	payload, err := e.Serializer.Marshal(v)
 	if err != nil {
-		e.Logger.Warn().Err(err)
+		e.Logger.Debug().Err(err)
 		return err
 	}
-	err = e.RedisSendInfo(payload)
+	err = e.SendInfoFunc(payload)
 	if err != nil {
-		e.Logger.Warn().Err(err)
+		e.Logger.Debug().Err(err)
 		return err
 	}
 	return nil
 }
-// sendStatisticAboutUsers sends information about all users to Redis.
+
+// sendStatisticAboutUsers sends information about all users to the Redis.
 func (e *Engine) sendStatisticAboutUsers() {
 	ticker := time.NewTicker(time.Second * time.Duration(e.Conf.SendStatisticInterval))
 	defer ticker.Stop()
 	for range ticker.C {
 		e.PoolCommands.Schedule(func() {
 			companies := e.Subs.GetStatisctics()
-			if companies == nil {
+			if companies.Stats == nil {
 				return
 			}
 			err := e.serializeAndSend(companies)
 			if err != nil {
-				e.Logger.Warn().Err(err)
+				e.Logger.Debug().Err(err)
 				return
 			}
 		})
 	}
 }
-// startRedisListen starts listen to Redis Message channel.
-func (e *Engine) startRedisListen() {
+
+// startRedisListen creates a function that runs when a message arrives for the Сlient.
+func (e *Engine) startRedisListen() func(msg string) {
 	e.Logger.Info().Msg("redis listener was started")
 
-	for msg := range e.RedisMsgSub.Channel() {
+	f := func(msg string) {
 		e.PoolCommands.Schedule(func() {
 			var m redisMessage
-			err := e.Serializer.Unmarshal([]byte(msg.Payload), &m)
+			err := e.Serializer.Unmarshal([]byte(msg), &m)
 			if err != nil {
 				e.Logger.Warn().Err(err)
-				return 
+				return
 			}
 			client, isOnline := e.Subs.GetClient(m.CompanyName, m.ClientId)
 			// if user is offline check if there is free space to store messages
 			if !isOnline {
-				_, length := e.Redis.sGetMembers(context.TODO(), m.ClientId)
+				_, length := e.msgController.GetArray(context.TODO(), m.ClientId)
 				if length > int(e.Conf.MaxUserMessages) {
 					e.Logger.Warn().Msgf("user with id=%s has reached the limit of cached messages", m.ClientId)
 				} else {
-					e.Redis.sAdd(context.TODO(), m.ClientId, msg.Payload)
+					e.msgController.SetArrayValue(context.TODO(), m.ClientId, msg)
 				}
 				return
 			}
 			e.Logger.Debug().Msgf("Message {%s} to client {%s} with company id {%s}", m.Message, m.ClientId, m.CompanyName)
-			e.sendMsg(Message{client, []byte(msg.Payload)}, m.CompanyName)
+			e.sendMsg(Message{client, []byte(msg)}, m.CompanyName)
 		})
 	}
+	return f
 }
 
 // func (c *Client) HandleWrite(msg []byte, msgType ws.OpCode) error {
@@ -223,6 +222,7 @@ func (e *Engine) HandleRead(c *Client) ([]byte, bool, error) {
 	}
 	return payload, isControl, nil
 }
+
 // Handle is a function that upgrades the websocket connection,
 // creates a client, fires a poller for listening messages from client.
 func (e *Engine) Handle(conn net.Conn) {
@@ -256,7 +256,7 @@ func (e *Engine) Handle(conn net.Conn) {
 
 	readDescriptor, _ := netpoll.Handle(conn, netpoll.EventRead)
 
-	cachedMessages, length := e.Redis.sGetMembers(context.TODO(), userId)
+	cachedMessages, length := e.msgController.GetArray(context.TODO(), userId)
 
 	client := NewClient(transport, userId)
 	err, deleteClient := e.Subs.AddClient(companyName, client)
@@ -274,7 +274,7 @@ func (e *Engine) Handle(conn net.Conn) {
 			for _, msg := range cachedMessages {
 				e.sendMsg(Message{client, []byte(msg)}, companyName)
 			}
-			e.Redis.deleteK(context.TODO(), client.UserId)
+			e.msgController.DeleteKey(context.TODO(), client.UserId)
 		})
 	}
 
@@ -312,27 +312,28 @@ func (e *Engine) Handle(conn net.Conn) {
 // SaveState saves the state of active CompanyHubs.
 func (e *Engine) SaveState() error {
 	stats := e.Subs.GetStatisctics()
-	data, err := e.Serializer.Marshal(&stats)
+	data, err := e.Serializer.Marshal(stats)
 	if err != nil {
+		e.Logger.Debug().Err(err)
 		return err
 	}
 	ctx := context.Background()
-	return e.Redis.setKV(ctx, "save", data, 0)
+	return e.msgController.SetValue(ctx, "save", data, 0)
 }
 
 // RestoreState restores the state of active CompanyHubs after restart.
 func (e *Engine) RestoreState() error {
 	ctx := context.TODO()
-	val, err := e.Redis.getV(ctx, "save")
+	val, err := e.msgController.GetValue(ctx, "save")
 	if err == redis.Nil {
 		return errors.New("key doesn't exists")
 	}
-	var stats []CompanyStats
+	var stats CompanyStatsWrapper
 	err = e.Serializer.Unmarshal([]byte(val), &stats)
 	if err != nil {
 		return err
 	}
-	for _, c := range stats {
+	for _, c := range stats.Stats {
 		if c.Expired == true {
 			continue
 		}
@@ -344,13 +345,12 @@ func (e *Engine) RestoreState() error {
 	return nil
 }
 
-
-
 func (e *Engine) GetActiveUsers(w http.ResponseWriter, r *http.Request) {
 	users, _ := e.Subs.GetActiveUsers("test")
 	_, _ = w.Write([]byte(fmt.Sprintf("%d", users)))
 	e.Logger.Printf("Active users = %d", users)
 }
+
 // sendMsg is a helper function that allows you to send messages to the Client.
 func (e *Engine) sendMsg(msg Message, compName string) bool {
 	e.Subs.SendMessage(msg, compName)

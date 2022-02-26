@@ -24,7 +24,7 @@ type Cache interface {
 	// GetActiveUsers gets active users from CompanyHub.
 	GetActiveUsers(companyName string) (uint, error)
 	// GetStatisctics gets infromation about all CompanyHubs.
-	GetStatisctics() []CompanyStats
+	GetStatisctics() CompanyStatsWrapper
 	// SendMessage sends message to the Client.
 	SendMessage(msg Message, companyName string)
 }
@@ -58,7 +58,7 @@ func (r *RamCache) SendMessage(msg Message, companyName string) {
 	hub.msg <- msg
 }
 
-func (r *RamCache) GetStatisctics() []CompanyStats {
+func (r *RamCache) GetStatisctics() CompanyStatsWrapper {
 	r.mu.RLock()
 	length := len(r.users)
 	counter := 0
@@ -79,9 +79,9 @@ func (r *RamCache) GetStatisctics() []CompanyStats {
 	}
 	r.mu.RUnlock()
 	if len(stats) == 0 {
-		return nil
+		return CompanyStatsWrapper{}
 	}
-	return stats
+	return CompanyStatsWrapper{Stats: stats}
 }
 func (r *RamCache) AddCompany(companyName string, maxUsers uint, ttl time.Duration) error {
 	_, ok := r.getCompany(companyName)
