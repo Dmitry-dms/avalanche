@@ -15,13 +15,12 @@ import (
 	"github.com/Dmitry-dms/avalanche/pkg/pool"
 	"github.com/Dmitry-dms/avalanche/pkg/serializer"
 	"github.com/Dmitry-dms/avalanche/pkg/websocket"
+	
+
 	"github.com/pkg/errors"
 	"github.com/rs/zerolog"
 
-	"github.com/go-redis/redis/v8"
 	"github.com/mailru/easygo/netpoll"
-
-	"github.com/gobwas/ws"
 )
 
 // Engine struct is a core of Avalanche websocket server.
@@ -37,6 +36,8 @@ type Engine struct {
 	Subs Cache
 	// Server is used for exposing pprof handlers.
 	Server net.Listener
+	// upgrader is an implementation of the Upgrader interface.
+	upgrader Upgrader
 	// PoolConnection is a goroutine pool which helps with accepting many connections at once.
 	PoolConnection *pool.Pool
 	// PoolCommands reduces the creation of a large number of goroutines when working with
@@ -62,7 +63,7 @@ type Engine struct {
 // NewEngine creates a core of Avalanche websocket server and initiates connection to the message broker.
 func NewEngine(ctx context.Context, config Config, logger *zerolog.Logger, cache Cache,
 	conn net.Listener, poolConn, poolComm *pool.Pool,
-	poller netpoll.Poller, s serializer.Serializer, msgController MessageController) (*Engine, error) {
+	poller netpoll.Poller, s serializer.Serializer, msgController MessageController, upg Upgrader) (*Engine, error) {
 
 	sendInfoFunc := func(payload []byte) error {
 		return msgController.Publish(ctx, config.RedisInfoPrefix, payload) //+config.Name
@@ -85,18 +86,16 @@ func NewEngine(ctx context.Context, config Config, logger *zerolog.Logger, cache
 		Serializer:     s,
 		AuthManager:    authManager,
 		msgController:  msgController,
+		upgrader:       upg,
 	}
 	if err := msgController.Ping(); err != nil {
 		engine.Logger.Fatal().Err(err).Msg("can't connect to message broker")
 	}
-	commandsFunc := engine.listeningCommands()
-	go msgController.Subscribe(ctx, config.RedisCommandsPrefix, commandsFunc)
-	msgFunc := engine.startRedisListen()
-	go msgController.Subscribe(ctx, config.RedisMsgPrefix, msgFunc)
-
+	go msgController.Subscribe(ctx, config.RedisCommandsPrefix, engine.listeningCommands())
+	go msgController.Subscribe(ctx, config.RedisMsgPrefix, engine.startRedisListen())
 	go engine.sendStatisticAboutUsers()
 
-	engine.startupMessage([]byte(fmt.Sprintf("WS server: {%s} {%s} succesfully connected to hub. Port = %s", config.Name, config.Version, config.Port)))
+	engine.startupMessage([]byte(fmt.Sprintf("WS server: {%s} {%s} succesfully connected to message broker. Port = %s", config.Name, config.Version, config.Port)))
 	return engine, nil
 }
 
@@ -182,7 +181,7 @@ func (e *Engine) startRedisListen() func(msg string) {
 
 	f := func(msg string) {
 		e.PoolCommands.Schedule(func() {
-			var m redisMessage
+			var m brokerMessage
 			err := e.Serializer.Unmarshal([]byte(msg), &m)
 			if err != nil {
 				e.Logger.Warn().Err(err)
@@ -214,7 +213,7 @@ func (e *Engine) startRedisListen() func(msg string) {
 // 	return nil
 // }
 
-// HandleRead is a wrapper of connection Read function.
+// HandleRead is a wrapper for the connection Read function.
 func (e *Engine) HandleRead(c *Client) ([]byte, bool, error) {
 	payload, isControl, err := c.Connection.Read()
 	if err != nil {
@@ -223,29 +222,16 @@ func (e *Engine) HandleRead(c *Client) ([]byte, bool, error) {
 	return payload, isControl, nil
 }
 
+func (e *Engine) ParseToken(accessToken string) (string, error) {
+	return e.AuthManager.Parse(accessToken)
+}
+
 // Handle is a function that upgrades the websocket connection,
 // creates a client, fires a poller for listening messages from client.
 func (e *Engine) Handle(conn net.Conn) {
 	var userId, companyName string
-	u := ws.Upgrader{
-		ReadBufferSize:  256,
-		WriteBufferSize: 1024,
-		OnHeader: func(key, value []byte) error {
-			if string(key) == "User" {
-				userId = string(value)
-			} else if string(key) == "Token" {
-				var err error
-				companyName, err = e.AuthManager.Parse(string(value))
-				if err != nil {
-					return ws.RejectConnectionError(
-						ws.RejectionReason(fmt.Sprintf("bad token: %s", err)),
-						ws.RejectionStatus(400))
-				}
-			}
-			return nil
-		},
-	}
-	_, err := u.Upgrade(conn)
+
+	err := e.upgrader.Upgrade(conn, 256, 1024, &userId, &companyName, e.ParseToken)
 	if err != nil {
 		e.Logger.Warn().Err(err).Msg("upgrade error")
 		_ = conn.Close()
@@ -278,14 +264,14 @@ func (e *Engine) Handle(conn net.Conn) {
 		})
 	}
 
-	// Start a goroutine to let GC collect unnecessary data
+	// Start a goroutine to let the GC collect unnecessary data.
 	go func() {
 		_ = e.Poller.Start(readDescriptor, func(ev netpoll.Event) {
 
 			if ev&(netpoll.EventReadHup|netpoll.EventHup) != 0 {
 				_ = e.Poller.Stop(readDescriptor)
 				deleteClient()
-				e.Logger.Info().Msgf("user with id={%s} was disconnected", client.UserId)
+				e.Logger.Debug().Msgf("user with id={%s} was disconnected", client.UserId)
 				e.Logger.Debug().Msg(ev.String())
 				return
 			}
@@ -296,9 +282,6 @@ func (e *Engine) Handle(conn net.Conn) {
 				return
 			} else {
 				if !isControl {
-					// if string(payload) == "test" {
-					// 	client.HandleWrite([]byte{}, ws.OpPing)
-					// }
 					e.sendMsg(Message{Client: client, Msg: []byte(strings.ToUpper(string(payload)))}, companyName)
 					e.Logger.Printf("Message from user={%s}: {%s}\n", client.UserId, payload)
 				}
@@ -306,7 +289,6 @@ func (e *Engine) Handle(conn net.Conn) {
 			}
 		})
 	}()
-
 }
 
 // SaveState saves the state of active CompanyHubs.
@@ -325,7 +307,7 @@ func (e *Engine) SaveState() error {
 func (e *Engine) RestoreState() error {
 	ctx := context.TODO()
 	val, err := e.msgController.GetValue(ctx, "save")
-	if err == redis.Nil {
+	if err != nil {
 		return errors.New("key doesn't exists")
 	}
 	var stats CompanyStatsWrapper
@@ -334,6 +316,7 @@ func (e *Engine) RestoreState() error {
 		return err
 	}
 	for _, c := range stats.Stats {
+		
 		if c.Expired == true {
 			continue
 		}
@@ -357,26 +340,4 @@ func (e *Engine) sendMsg(msg Message, compName string) bool {
 	//client.MessageChan <- msg
 	//client.HandleWrite([]byte(msg), ws.OpText)
 	return true
-}
-func (e *Engine) SendToClientById(w http.ResponseWriter, r *http.Request) {
-	userId := r.Header.Get("user-id")
-	companyName := r.Header.Get("company-name")
-	payload := r.Header.Get("payload")
-	if userId == "" || companyName == "" || payload == "" {
-		printError(w, "Please set user-id, company-name, payload as header", http.StatusBadRequest)
-		return
-	}
-	client, ok := e.Subs.GetClient(companyName, userId)
-	if !ok {
-		printError(w, "User offline", http.StatusBadRequest)
-		return
-	}
-	ms := Message{client, []byte(payload)}
-	ok = e.sendMsg(ms, companyName)
-}
-func printError(w http.ResponseWriter, msg string, statusCode int) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(statusCode)
-	str := fmt.Sprintf(`{"Error":"%s"}`, msg)
-	fmt.Fprint(w, str)
 }

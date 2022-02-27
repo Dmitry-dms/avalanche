@@ -18,7 +18,7 @@ var (
 	_ easyjson.Marshaler
 )
 
-func easyjsonD2b7633eDecodeGithubComDmitryDmsAvalancheInternal(in *jlexer.Lexer, out *redisMessage) {
+func easyjsonD2b7633eDecodeGithubComDmitryDmsAvalancheInternal(in *jlexer.Lexer, out *brokerMessage) {
 	isTopLevel := in.IsStart()
 	if in.IsNull() {
 		if isTopLevel {
@@ -53,7 +53,7 @@ func easyjsonD2b7633eDecodeGithubComDmitryDmsAvalancheInternal(in *jlexer.Lexer,
 		in.Consumed()
 	}
 }
-func easyjsonD2b7633eEncodeGithubComDmitryDmsAvalancheInternal(out *jwriter.Writer, in redisMessage) {
+func easyjsonD2b7633eEncodeGithubComDmitryDmsAvalancheInternal(out *jwriter.Writer, in brokerMessage) {
 	out.RawByte('{')
 	first := true
 	_ = first
@@ -76,26 +76,26 @@ func easyjsonD2b7633eEncodeGithubComDmitryDmsAvalancheInternal(out *jwriter.Writ
 }
 
 // MarshalJSON supports json.Marshaler interface
-func (v redisMessage) MarshalJSON() ([]byte, error) {
+func (v brokerMessage) MarshalJSON() ([]byte, error) {
 	w := jwriter.Writer{}
 	easyjsonD2b7633eEncodeGithubComDmitryDmsAvalancheInternal(&w, v)
 	return w.Buffer.BuildBytes(), w.Error
 }
 
 // MarshalEasyJSON supports easyjson.Marshaler interface
-func (v redisMessage) MarshalEasyJSON(w *jwriter.Writer) {
+func (v brokerMessage) MarshalEasyJSON(w *jwriter.Writer) {
 	easyjsonD2b7633eEncodeGithubComDmitryDmsAvalancheInternal(w, v)
 }
 
 // UnmarshalJSON supports json.Unmarshaler interface
-func (v *redisMessage) UnmarshalJSON(data []byte) error {
+func (v *brokerMessage) UnmarshalJSON(data []byte) error {
 	r := jlexer.Lexer{Data: data}
 	easyjsonD2b7633eDecodeGithubComDmitryDmsAvalancheInternal(&r, v)
 	return r.Error()
 }
 
 // UnmarshalEasyJSON supports easyjson.Unmarshaler interface
-func (v *redisMessage) UnmarshalEasyJSON(l *jlexer.Lexer) {
+func (v *brokerMessage) UnmarshalEasyJSON(l *jlexer.Lexer) {
 	easyjsonD2b7633eDecodeGithubComDmitryDmsAvalancheInternal(l, v)
 }
 func easyjsonD2b7633eDecodeGithubComDmitryDmsAvalancheInternal1(in *jlexer.Lexer, out *CompanyToken) {
@@ -197,7 +197,7 @@ func easyjsonD2b7633eDecodeGithubComDmitryDmsAvalancheInternal2(in *jlexer.Lexer
 			continue
 		}
 		switch key {
-		case "Stats":
+		case "stats":
 			if in.IsNull() {
 				in.Skip()
 				out.Stats = nil
@@ -235,7 +235,7 @@ func easyjsonD2b7633eEncodeGithubComDmitryDmsAvalancheInternal2(out *jwriter.Wri
 	first := true
 	_ = first
 	{
-		const prefix string = ",\"Stats\":"
+		const prefix string = ",\"stats\":"
 		out.RawString(prefix[1:])
 		if in.Stats == nil && (out.Flags&jwriter.NilSliceAsEmpty) == 0 {
 			out.RawString("null")

@@ -19,11 +19,9 @@ import (
 	"github.com/Dmitry-dms/avalanche/pkg/msg_controllers/redis"
 	"github.com/Dmitry-dms/avalanche/pkg/pool"
 	"github.com/Dmitry-dms/avalanche/pkg/serializer/easyjson"
-	"github.com/pkg/errors"
-
-	//"github.com/Dmitry-dms/avalanche/pkg/serializer/json"
-	"github.com/arl/statsviz"
+	"github.com/Dmitry-dms/avalanche/pkg/websocket"
 	"github.com/joho/godotenv"
+	"github.com/pkg/errors"
 
 	//"github.com/prometheus/client_golang/prometheus"
 	//	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -105,16 +103,13 @@ func ParseConfig() (*internal.Config, error) {
 
 func main() {
 
+	tick := time.NewTicker(30 * time.Second)
+	defer tick.Stop()
 	go func() {
-		for {
-			time.Sleep(30 * time.Second)
+		for range tick.C {
 			printMemUsage()
 		}
 	}()
-	// profiler.Start(profiler.Config{
-	// 	ApplicationName: "avalanche",
-	// 	ServerAddress:   "http://host.docker.internal:4040",
-	// })
 
 	zerolg := NewConsole(true)
 	config, err := ParseConfig()
@@ -138,18 +133,21 @@ func main() {
 	jsonSerializer := &easyjson.CustomEasyJson{}
 	ctx := context.Background()
 
+	upgrader := &websocket.GobwasUpgrader{}
+
 	red := redis.InitRedis(config.RedisAddress)
-	engine, _ := internal.NewEngine(ctx, *config, zerolg, cache, ln, poolConnection, poolCommands, poller, jsonSerializer, red)
+	engine, errEngine := internal.NewEngine(ctx, *config, zerolg, cache, ln, poolConnection, poolCommands, poller, jsonSerializer, red, upgrader)
+	if errEngine != nil {
+		zerolg.Fatal().Err(errEngine).Msg("unable to launch the engine")
+	}
 
-	err = engine.RestoreState()
-
-	if err != nil {
+	errRestoreSt := engine.RestoreState()
+	if errRestoreSt != nil {
 		zerolg.Debug().Err(err).Msg("unable to find any company")
 		engine.Subs.AddCompany("test", 100000, time.Hour*12)
 	}
-	//engine.Subs.AddCompany("test2", 100000, time.Second*30)
 
-	//log.Printf("listening %s (%q)", ln.Addr(), addr)
+	zerolg.Info().Msgf("accepting websocket connections on port %s", config.Port)
 
 	acceptDesc := netpoll.Must(netpoll.HandleListener(ln, netpoll.EventRead|netpoll.EventOneShot))
 
@@ -160,20 +158,10 @@ func main() {
 			conn, err := ln.Accept()
 
 			if err != nil {
-				zerolg.Fatal().Err(err)
-				if ne, ok := err.(net.Error); ok && ne.Temporary() {
-					//goto cooldown
-				}
-				// 	log.Fatalf("accept error: %v", err)
-				// cooldown:
-				// 	delay := 5 * time.Millisecond
-				// 	log.Printf("accept error: %v; retrying in %s", err, delay)
-				// 	time.Sleep(delay)
+				zerolg.Warn().Err(err)
 			}
-
 			go engine.Handle(conn)
 
-			//getWsCounter.WithLabelValues(status).Inc()
 		})
 		_ = engine.Poller.Resume(acceptDesc)
 	})
@@ -184,8 +172,6 @@ func main() {
 		mux.HandleFunc("/p", func(w http.ResponseWriter, r *http.Request) {
 			pprof.Index(w, r)
 		})
-		statsviz.Register(mux)
-		mux.HandleFunc("/ws-send", engine.SendToClientById)
 		//mux.Handle("/metrics", promhttp.Handler())
 		mux.HandleFunc("/profile", pprof.Profile)
 		mux.Handle("/heap", pprof.Handler("heap"))

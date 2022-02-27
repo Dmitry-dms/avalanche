@@ -7,38 +7,20 @@ import (
 	"time"
 )
 
-// deleteClientFn is responsible for removing and disabling the Client.
-type deleteClientFn func() error
 
-type Cache interface {
-	// AddCompany creates a new CompanyHub.
-	AddCompany(companyName string, maxUsers uint, ttl time.Duration) error
-	// GetCompany gets a pointer to the CompanyHub if it exists.
-	GetCompany(companyName string) (*ClientHub, error)
-	// DeleteCompany deletes CompanyHub.
-	DeleteCompany(companyName string) error
-	// AddClient adds a Client to CompanyHub.
-	AddClient(companyName string, client *Client) (error, deleteClientFn)
-	// GetClient gets a pointer to the client if it exists. 
-	GetClient(companyName, clientId string) (*Client, bool)
-	// GetActiveUsers gets active users from CompanyHub.
-	GetActiveUsers(companyName string) (uint, error)
-	// GetStatisctics gets infromation about all CompanyHubs.
-	GetStatisctics() CompanyStatsWrapper
-	// SendMessage sends message to the Client.
-	SendMessage(msg Message, companyName string)
-}
 
 const (
 	ErrCompanyAE = "company already exists"
 	ErrCompanyDE = "company doesn't exists"
 
-	// shows the maximum possible length of Client's id and Company names.
+	// Sets the maximum possible length of Client's id and Company names.
 	MaxCharLength = 36 // RFC4122 p.3
 )
 
 var (
 	ErrCharMaxLength = fmt.Sprintf("string must contain less than %d characters", MaxCharLength)
+	// check if RamCache is an implementation of the Cache interface at compile time.
+	_ Cache = &RamCache{}
 )
 
 // RamCache is an implementation of the Cache interface.

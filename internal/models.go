@@ -7,14 +7,14 @@ import "time"
 */
 
 
-// redisMessage is a struct which contains message to Client.
-type redisMessage struct {
+// brokerMessage is a struct which contains message to Client.
+type brokerMessage struct {
 	CompanyName string `json:"company_name"`
 	ClientId    string `json:"client_id"`
 	Message     string `json:"message"`
 } //"{\"company_name\":\"testing\",\"client_id\":\"4\",\"message\":\"10\"}"
 
-// AddCompanyMessage is a struct which contains infromation about new Company.
+// The AddCompanyMessage is a structure containing information about the new Company.
 type AddCompanyMessage struct {
 	CompanyName string `json:"company_name"`
 	MaxUsers    uint   `json:"max_users"`
@@ -27,12 +27,12 @@ type CompanyToken struct {
 	ServerName string `json:"server_name"`
 	Duration   int    `json:"duration_hour"`
 }
-// AddCompanyResponse is the response that is sent to Redis after the Company is created.
+// AddCompanyResponse is the response that is sent to the message broker after the Company has been created.
 type AddCompanyResponse struct {
 	Token       CompanyToken `json:"company_token"`
 	CompanyName string       `json:"company_name"`
 }
-// CompanyStats is a struct that contains information about existing Companies.
+// CompanyStats is a structure containing information about existing Сompanies.
 type CompanyStats struct {
 	Name        string        `json:"company_name"`
 	OnlineUsers uint          `json:"online_users"`
@@ -43,8 +43,7 @@ type CompanyStats struct {
 	Stopped     time.Time     `json:"stoped_time"`
 	Expired     bool          `json:"expired"`
 }
-// CompanyStatsWrapper was created because []CompanyStats doesn't 
-// implement easyjson.Marshaler/Unmarshaler interface
+// CompanyStatsWrapper is a wrapper for []CompanyStats.
 type CompanyStatsWrapper struct {
 	Stats []CompanyStats `json:"stats"`
 }
