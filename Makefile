@@ -1,20 +1,26 @@
 .SILENT:
+include .env
 
-WS_PORT=8000
-MONITORING_PORT=8090
+#WS_PORT=8002
+#MONITORING_PORT=8090
 NUM_CONNECT=10000
+WS_ADDR=172.17.0.1
+MIN=0
+DELTA=20000
 
 r:
 	go run cmd/main.go
 cl:
 	go run client/client.go ${WS_PORT} ${NUM_CONNECT}
 c:
-	go run test3-client-gorilla/main.go
+	docker run --rm --ulimit nofile=20000:25000 client ./goapp ${WS_ADDR}:${WS_PORT} ${MIN} ${DELTA}
+cw:
+	go run ./client/client.go ${WS_ADDR}:${WS_PORT} ${MIN} ${MAX}
 run:
 	# docker run -d --name=pyro -p 4040:4040 pyroscope/pyroscope server
-	docker run  -d --name=ava -p ${WS_PORT}:8000 -p ${MONITORING_PORT}:8090 avalanche
+	docker run  --name=ava --ulimit nofile=220000:230000 -p ${WS_PORT}:8000 -p ${MONITORING_PORT}:8090 avalanche
 graph:
-	docker run -d -p 9090:9090 prom/prometheus
+	#docker run -d -p 9090:9090 my-prometheus
 	docker run -d --name=grafana -p 3000:3000 grafana/grafana	
 pr: 
 	docker build -t my-prometheus prometheus/
@@ -49,6 +55,14 @@ profile:
 	go tool pprof  http://127.0.0.1:${MONITORING_PORT}/profile
 allocs:
 	go tool pprof  http://127.0.0.1:${MONITORING_PORT}/allocs
+start:
+	docker start redis
+	docker start prom
+	docker start grafana
+stop:
+	docker stop redis
+	docker stop prom
+	docker stop grafana
 # docker run -d --name=pyro -p 4040:4040 pyroscope/pyroscope server
 # docker rm -f pyro
 # --ulimit nofile=100000:100009

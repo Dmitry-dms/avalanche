@@ -3,9 +3,11 @@ package main
 import (
 	"context"
 	"fmt"
+
 	"os/signal"
 	"runtime"
 	"strconv"
+
 	"syscall"
 
 	"log"
@@ -23,8 +25,8 @@ import (
 	"github.com/joho/godotenv"
 	"github.com/pkg/errors"
 
-	//"github.com/prometheus/client_golang/prometheus"
-	//	"github.com/prometheus/client_golang/prometheus/promhttp"
+	//	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/rs/zerolog"
 
 	"github.com/mailru/easygo/netpoll"
@@ -40,6 +42,7 @@ func printMemUsage() {
 	runtime.GC()
 	var m runtime.MemStats
 	runtime.ReadMemStats(&m)
+
 	fmt.Printf("Alloc = %v MiB", bToMb(m.Alloc))
 	fmt.Printf("\tTotalAlloc = %v MiB", bToMb(m.TotalAlloc))
 	fmt.Printf("\tStackInuse = %v MiB", bToMb(m.StackInuse))
@@ -50,13 +53,13 @@ func printMemUsage() {
 func bToMb(b uint64) uint64 {
 	return b / 1024 / 1024
 }
-func NewConsole(isDebug bool) *zerolog.Logger {
+func NewZerolog(isDebug bool, name string) *zerolog.Logger {
 	logLevel := zerolog.InfoLevel
 	if isDebug {
 		logLevel = zerolog.DebugLevel
 	}
 	zerolog.SetGlobalLevel(logLevel)
-	logger := zerolog.New(os.Stdout).With().Timestamp().Logger()
+	logger := zerolog.New(os.Stdout).With().Timestamp().Str("avalanche_server_name", name).Logger()
 	return &logger
 }
 
@@ -105,14 +108,14 @@ func main() {
 
 	tick := time.NewTicker(30 * time.Second)
 	defer tick.Stop()
-	go func() {
-		for range tick.C {
-			printMemUsage()
-		}
-	}()
+	// go func() {
+	// 	for range tick.C {
+	// 		printMemUsage()
+	// 	}
+	// }()
 
-	zerolg := NewConsole(true)
-	config, err := ParseConfig()
+	config, err := ParseConfig() // if error, return default config
+	zerolg := NewZerolog(true, config.Name)
 	if err != nil {
 		zerolg.Fatal().Err(errors.Unwrap(err))
 	}
@@ -127,7 +130,7 @@ func main() {
 		zerolg.Fatal().Err(err).Msgf("Can't start listening on port %s", config.Port)
 	}
 
-	poolConnection := pool.NewPool(128, 20, 3)
+	poolConnection := pool.NewPool(200, 150, 20)
 	poolCommands := pool.NewPool(50, 1, 3)
 
 	jsonSerializer := &easyjson.CustomEasyJson{}
@@ -156,11 +159,12 @@ func main() {
 		engine.PoolConnection.Schedule(func() {
 
 			conn, err := ln.Accept()
-
 			if err != nil {
-				zerolg.Warn().Err(err)
+				zerolg.Debug().Err(err)
+			} else {
+				upg := &websocket.GobwasUpgrader{}
+				go engine.Handle(conn, upg)
 			}
-			go engine.Handle(conn)
 
 		})
 		_ = engine.Poller.Resume(acceptDesc)
@@ -172,7 +176,7 @@ func main() {
 		mux.HandleFunc("/p", func(w http.ResponseWriter, r *http.Request) {
 			pprof.Index(w, r)
 		})
-		//mux.Handle("/metrics", promhttp.Handler())
+		mux.Handle("/metrics", promhttp.Handler())
 		mux.HandleFunc("/profile", pprof.Profile)
 		mux.Handle("/heap", pprof.Handler("heap"))
 		mux.Handle("/allocs", pprof.Handler("allocs"))
@@ -183,17 +187,27 @@ func main() {
 			zerolg.Fatal().Err(err).Msgf("Can't start monitoring on port %s", config.MonitoringPort)
 		}
 	}()
+
+	// defer func() {
+	// 	recover()
+	// 	sig <- syscall.SIGTERM
+	// }()
 	signal.Notify(sig, syscall.SIGTERM, syscall.SIGINT)
 
 	select {
 	case sig := <-sig:
+
 		zerolg.Info().Msgf("signal %q received; shutting down", sig)
+		// save Hub's TTL to Storer
 		if err := engine.SaveState(); err != nil {
 			zerolg.Warn().Err(err)
 		} else {
 			zerolg.Info().Msgf("cache was successfully saved to Storer")
 		}
+		// delete and disconnect all active users
+		engine.DeleteAllClients()
 		ctx := context.Background()
+		//ln.Close()
 		if err := s.Shutdown(ctx); err != nil {
 			zerolg.Fatal().Err(err)
 		}

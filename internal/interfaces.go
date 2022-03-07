@@ -23,6 +23,8 @@ type Cache interface {
 	GetCompany(companyName string) (*ClientHub, error)
 	// DeleteCompany deletes CompanyHub.
 	DeleteCompany(companyName string) error
+	// GetAllCompanies returns a slice containing all active companies.
+	GetAllCompanies() []ClientHub
 	// AddClient adds a Client to CompanyHub.
 	AddClient(companyName string, client *Client) (error, deleteClientFn)
 	// GetClient gets a pointer to the client if it exists. 
@@ -35,6 +37,11 @@ type Cache interface {
 	SendMessage(msg Message, companyName string)
 }
 
+type Websocket interface {
+	Write(msg []byte) error
+	Read() ([]byte, bool, error)
+	Close() error
+}
 
 type Publisher interface {
 	// Publish messages to a message broker.

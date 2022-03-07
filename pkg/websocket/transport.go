@@ -1,56 +1,37 @@
 package websocket
 
 import (
-	"fmt"
 	"io/ioutil"
 	"net"
-	//"sync"
 	"github.com/gobwas/ws"
 	"github.com/gobwas/ws/wsutil"
 	"github.com/pkg/errors"
 )
 
-type CustomWebsocket struct {
-	//mu      sync.RWMutex
+type GobwasWebsocket struct {
 	closed  bool
 	conn    net.Conn
 }
 
-
-type Websocket interface {
-	Write(msg []byte) error
-	Read() ([]byte, bool, error)
-	Close() error
-}
-
-
-func NewWebsocketTransport(conn net.Conn) CustomWebsocket {
-	return CustomWebsocket{
+func NewWebsocketTransport(conn net.Conn) GobwasWebsocket {
+	return GobwasWebsocket{
 		conn:    conn,
 	}
 }
-func (t *CustomWebsocket) IsClosed() bool {
+func (t *GobwasWebsocket) IsClosed() bool {
 	return t.closed
 }
 
-
-
-func (t CustomWebsocket) Read() ([]byte, bool, error) {
-	//t.mu.Lock()
-	//defer t.mu.Unlock()
-
+func (t GobwasWebsocket) Read() ([]byte, bool, error) {
 	h, r, err := wsutil.NextReader(t.conn, ws.StateServerSide)
 	if err != nil {
 		return nil, true, errors.Wrap(err, "reader error")
 	}
 
-	//TODO: make right header parsing between gorilla and gobwas (opCode is missing in gorilla)
 	if h.OpCode == ws.OpPing {
-		fmt.Println("called ping, sending pong")
 		return nil, false, wsutil.WriteServerMessage(t.conn, ws.OpPong, []byte{})
 	}
 	if h.OpCode == ws.OpPong {
-		fmt.Println("called pong")
 		return nil, false, nil
 	}
 
@@ -66,14 +47,14 @@ func (t CustomWebsocket) Read() ([]byte, bool, error) {
 	return data, false, nil
 }
 
-func (t CustomWebsocket) Write(msg []byte) error {
+func (t GobwasWebsocket) Write(msg []byte) error {
 	if err := wsutil.WriteServerMessage(t.conn, ws.OpText, msg); err != nil {
 		return err
 	}
 	return nil
 }
 
-func (t CustomWebsocket) Close() error {
+func (t GobwasWebsocket) Close() error {
 	// if t.closed {
 	// 	return nil
 	// }

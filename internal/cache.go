@@ -7,8 +7,6 @@ import (
 	"time"
 )
 
-
-
 const (
 	ErrCompanyAE = "company already exists"
 	ErrCompanyDE = "company doesn't exists"
@@ -28,6 +26,7 @@ type RamCache struct {
 	mu    sync.RWMutex
 	users map[string]*ClientHub
 }
+
 // NewRamCache creates RamCache object.
 func NewRamCache() *RamCache {
 	return &RamCache{
@@ -39,7 +38,16 @@ func (r *RamCache) SendMessage(msg Message, companyName string) {
 	hub, _ := r.GetCompany(companyName)
 	hub.msg <- msg
 }
-
+func (r *RamCache) GetAllCompanies() []ClientHub {
+	length := len(r.users)
+	hubs := make([]ClientHub, length)
+	i := 0
+	for _, v := range r.users {
+		hubs[i] = *v
+		i++
+	}
+	return hubs
+}
 func (r *RamCache) GetStatisctics() CompanyStatsWrapper {
 	r.mu.RLock()
 	length := len(r.users)
@@ -97,7 +105,7 @@ func (r *RamCache) DeleteCompany(companyName string) error {
 		return errors.New(ErrCompanyDE)
 	}
 	r.mu.Lock()
-	company.deleteClients()
+	company.deleteAllHubClients()
 	delete(r.users, companyName)
 	r.mu.Unlock()
 	return nil

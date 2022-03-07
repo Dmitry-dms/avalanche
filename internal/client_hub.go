@@ -65,7 +65,7 @@ func (c *ClientHub) listen() {
 	for {
 		select {
 		case <-c.timer.C:
-			c.deleteClients()
+			c.deleteAllHubClients()
 			c.expired = true
 			return
 		case usr := <-c.msg:
@@ -74,8 +74,8 @@ func (c *ClientHub) listen() {
 	}
 }
 
-// deleteClients deletes all active Clients.
-func (c *ClientHub) deleteClients() {
+// deleteAllHubClients deletes all active Clients.
+func (c *ClientHub) deleteAllHubClients() {
 	for _, cl := range c.Users {
 		cl.Disconnect()
 		c.deleteClient(cl.UserId)
