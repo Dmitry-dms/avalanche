@@ -3,7 +3,6 @@ package internal
 import (
 	"context"
 
-	"strings"
 
 	"fmt"
 	"time"
@@ -12,15 +11,16 @@ import (
 	"net/http"
 
 	"github.com/Dmitry-dms/avalanche/pkg/auth"
+	"github.com/Dmitry-dms/avalanche/pkg/epoll"
 	"github.com/Dmitry-dms/avalanche/pkg/pool"
 	"github.com/Dmitry-dms/avalanche/pkg/serializer"
 	"github.com/Dmitry-dms/avalanche/pkg/websocket"
-	"github.com/gobwas/ws"
+
+	"github.com/gobwas/ws/wsutil"
 
 	"github.com/pkg/errors"
 	"github.com/rs/zerolog"
 
-	"github.com/mailru/easygo/netpoll"
 )
 
 // Engine struct is a core of Avalanche websocket server.
@@ -44,7 +44,7 @@ type Engine struct {
 	// serialization/deserialization, receiving messages from message broker.
 	PoolCommands *pool.Pool
 	// Poller is an implementation of Linux epoll.
-	Poller netpoll.Poller
+	Poller *epoll.Epoll
 	// msgController is an implementation of MessageController interface.
 	// It can publish/subscribe to the channels of the message broker.
 	// It caches CompanyHub's state and messages to offline users on shutdown and restores on startup.
@@ -63,7 +63,7 @@ type Engine struct {
 // NewEngine creates a core of Avalanche websocket server and initiates connection to the message broker.
 func NewEngine(ctx context.Context, config Config, logger *zerolog.Logger, cache Cache,
 	conn net.Listener, poolConn, poolComm *pool.Pool,
-	poller netpoll.Poller, s serializer.Serializer, msgController MessageController, upg Upgrader) (*Engine, error) {
+	poller *epoll.Epoll, s serializer.Serializer, msgController MessageController, upg Upgrader) (*Engine, error) {
 
 	sendInfoFunc := func(payload []byte) error {
 		return msgController.Publish(ctx, config.RedisInfoPrefix, payload) //+config.Name
@@ -76,7 +76,7 @@ func NewEngine(ctx context.Context, config Config, logger *zerolog.Logger, cache
 	engine := &Engine{
 		Context:        ctx,
 		conf:           config,
-		log:         logger,
+		log:            logger,
 		Subs:           cache,
 		Server:         conn,
 		PoolConnection: poolConn,
@@ -94,6 +94,7 @@ func NewEngine(ctx context.Context, config Config, logger *zerolog.Logger, cache
 	go msgController.Subscribe(ctx, config.RedisCommandsPrefix, engine.listeningCommands())
 	go msgController.Subscribe(ctx, config.RedisMsgPrefix, engine.startRedisListen())
 	//go engine.sendStatisticAboutUsers()
+	go engine.Start()
 
 	engine.startupMessage([]byte(fmt.Sprintf("WS server: {%s} {%s} succesfully connected to message broker. Port = %s", config.Name, config.Version, config.Port)))
 	return engine, nil
@@ -102,6 +103,7 @@ func NewEngine(ctx context.Context, config Config, logger *zerolog.Logger, cache
 func (e *Engine) startupMessage(msg []byte) error {
 	return e.sendInfoFunc(msg)
 }
+
 
 // listeningCommands creates a function that runs when a message arrives in the command channel.
 func (e *Engine) listeningCommands() func(msg string) {
@@ -226,43 +228,62 @@ func (e *Engine) ParseToken(accessToken string) (string, error) {
 	return e.authManager.Parse(accessToken)
 }
 
+func (e *Engine) Start() {
+	for {
+		connections, err := e.Poller.Wait()
+		if err != nil {
+			e.log.Printf("Failed to epoll wait %v", err)
+			continue
+		}
+		for _, conn := range connections {
+			if conn == nil {
+				break
+			}
+			if _, _, err := wsutil.ReadClientData(conn); err != nil {
+				if err := e.Poller.Remove(conn); err != nil {
+					e.log.Printf("Failed to remove %v", err)
+				}
+				conn.Close()
+			} else {
+				// This is commented out since in demo usage, stdout is showing messages sent from > 1M connections at very high rate
+				//log.Printf("msg: %s", string(msg))
+			}
+		}
+	}
+}
+
 // Handle is a function that upgrades the websocket connection,
 // creates a client, fires a poller for listening messages from client.
-func (e *Engine) Handle(conn net.Conn, upgr Upgrader) {
+func (e *Engine) Handle(conn net.Conn, upgr Upgrader) { 
 	var userId, companyName string
-
-	//err := upgr.Upgrade(conn, 256, 1024, &userId, &companyName, e.ParseToken)
-	u := ws.Upgrader{
-		ReadBufferSize:  256,
-		WriteBufferSize: 1024,
-		OnHeader: func(key, value []byte) error {
-			if string(key) == "User" {
-				userId = string(value)
-			} else if string(key) == "Token" {
-				var err error
-				companyN, err := e.ParseToken(string(value))
-				if err != nil {
-					return ws.RejectConnectionError(
-						ws.RejectionReason(fmt.Sprintf("bad token: %s", err)),
-						ws.RejectionStatus(400))
-				}
-				companyName = companyN
-			}
-			return nil
-		},
-	}
-	_, err := u.Upgrade(conn)
+	err := upgr.Upgrade(conn, 256, 256, &userId, &companyName, e.ParseToken)
+	// u := ws.Upgrader{
+	// 	ReadBufferSize:  256,
+	// 	WriteBufferSize: 1024,
+	// 	OnHeader: func(key, value []byte) error {
+	// 		if string(key) == "User" {
+	// 			userId = string(value)
+	// 		} else if string(key) == "Token" {
+	// 			var err error
+	// 			companyN, err := e.ParseToken(string(value))
+	// 			if err != nil {
+	// 				return ws.RejectConnectionError(
+	// 					ws.RejectionReason(fmt.Sprintf("bad token: %s", err)),
+	// 					ws.RejectionStatus(400))
+	// 			}
+	// 			companyName = companyN
+	// 		}
+	// 		return nil
+	// 	},
+	// }
+	// _, err := u.Upgrade(conn)
 	if err != nil {
 		e.log.Warn().Err(err).Msg("upgrade error")
 		_ = conn.Close()
 		return
 	}
-
 	transport := websocket.NewWebsocketTransport(conn)
 
-	//readDescriptor, _ := netpoll.Handle(conn, netpoll.EventRead)
-
-	cachedMessages, length := e.msgController.GetArray(context.TODO(), userId)
 
 	client := NewClient(transport, userId)
 	err, deleteClient := e.Subs.AddClient(companyName, client)
@@ -273,58 +294,110 @@ func (e *Engine) Handle(conn net.Conn, upgr Upgrader) {
 		return
 	}
 
-	e.log.Debug().Msgf("user connected with id={%s} and company={%s}", client.UserId, companyName)
-
-	if length > 0 {
-		e.PoolCommands.Schedule(func() {
-			for _, msg := range cachedMessages {
-				e.sendMsg(Message{client, []byte(msg)}, companyName)
-			}
-			e.msgController.DeleteKey(context.TODO(), client.UserId)
-		})
+	if err := e.Poller.Add(conn); err != nil {
+		e.log.Printf("Failed to add connection %v", err)
+		deleteClient()
+		conn.Close()
 	}
-	go func(client *Client){
-		for {
-			payload, isControl, err := e.HandleRead(client)
-			if err != nil {
-				//_ = e.Poller.Stop(readDescriptor)
-				deleteClient()
-				e.log.Debug().Err(err)
-				return
-			} else {
-				if !isControl {
-					e.sendMsg(Message{Client: client, Msg: []byte(strings.ToUpper(string(payload)))}, companyName)
-					e.log.Debug().Msgf("Message from user={%s}: {%s}\n", client.UserId, payload)
-				}
-				//_ = e.Poller.Resume(readDescriptor)
-			}
-		}
-	}(client)
-
-	// Start a poller to notify a goroutine when the message comes in.
-		// _ = e.Poller.Start(readDescriptor, func(ev netpoll.Event) {
-
-		// 	if ev&(netpoll.EventReadHup|netpoll.EventHup) != 0 {
-		// 		_ = e.Poller.Stop(readDescriptor)
-		// 		deleteClient()
-		// 		//e.log.Debug().Msgf("user with id={%s} was disconnected", client.UserId)
-		// 		//e.log.Debug().Msg(ev.String())
-		// 		return
-		// 	}
-		// 	payload, isControl, err := e.HandleRead(client)
-		// 	if err != nil {
-		// 		_ = e.Poller.Stop(readDescriptor)
-		// 		e.log.Debug().Err(err)
-		// 		return
-		// 	} else {
-		// 		if !isControl {
-		// 			e.sendMsg(Message{Client: client, Msg: []byte(strings.ToUpper(string(payload)))}, companyName)
-		// 			e.log.Debug().Msgf("Message from user={%s}: {%s}\n", client.UserId, payload)
-		// 		}
-		// 		_ = e.Poller.Resume(readDescriptor)
-		// 	}
-		// })
 }
+
+
+
+//func (e *Engine) Handle2(conn net.Conn, upgr Upgrader) {
+	//var userId, companyName string
+
+	//err := upgr.Upgrade(conn, 256, 256, &userId, &companyName, e.ParseToken)
+	// u := ws.Upgrader{
+	// 	ReadBufferSize:  256,
+	// 	WriteBufferSize: 1024,
+	// 	OnHeader: func(key, value []byte) error {
+	// 		if string(key) == "User" {
+	// 			userId = string(value)
+	// 		} else if string(key) == "Token" {
+	// 			var err error
+	// 			companyN, err := e.ParseToken(string(value))
+	// 			if err != nil {
+	// 				return ws.RejectConnectionError(
+	// 					ws.RejectionReason(fmt.Sprintf("bad token: %s", err)),
+	// 					ws.RejectionStatus(400))
+	// 			}
+	// 			companyName = companyN
+	// 		}
+	// 		return nil
+	// 	},
+	// }
+	// _, err := u.Upgrade(conn)
+	// if err != nil {
+	// 	e.log.Warn().Err(err).Msg("upgrade error")
+	// 	_ = conn.Close()
+	// 	return
+	// }
+
+	// transport := websocket.NewWebsocketTransport(conn)
+
+	// cachedMessages, length := e.msgController.GetArray(context.TODO(), userId)
+
+	// client := NewClient(transport, userId)
+	// err, deleteClient := e.Subs.AddClient(companyName, client)
+	// if err != nil {
+	// 	e.log.Info().Err(err)
+	// 	conn.Write([]byte("user already exists"))
+	// 	conn.Close()
+	// 	return
+	// }
+
+	//e.log.Debug().Msgf("user connected with id={%s} and company={%s}", client.UserId, companyName)
+
+	// if length > 0 {
+	// 	e.PoolCommands.Schedule(func() {
+	// 		for _, msg := range cachedMessages {
+	// 			e.sendMsg(Message{client, []byte(msg)}, companyName)
+	// 		}
+	// 		e.msgController.DeleteKey(context.TODO(), client.UserId)
+	// 	})
+	// }
+	// go func(client *Client){
+	// 	for {
+	// 		payload, isControl, err := e.HandleRead(client)
+	// 		if err != nil {
+	// 			//_ = e.Poller.Stop(readDescriptor)
+	// 			deleteClient()
+	// 			e.log.Debug().Err(err)
+	// 			return
+	// 		} else {
+	// 			if !isControl {
+	// 				e.sendMsg(Message{Client: client, Msg: []byte(strings.ToUpper(string(payload)))}, companyName)
+	// 				e.log.Debug().Msgf("Message from user={%s}: {%s}\n", client.UserId, payload)
+	// 			}
+	// 			//_ = e.Poller.Resume(readDescriptor)
+	// 		}
+	// 	}
+	// }(client)
+	// readDescriptor, _ := netpoll.Handle(conn, netpoll.EventRead)
+	// //Start a poller to notify a goroutine when the message comes in.
+	// _ = e.Poller.Start(readDescriptor, func(ev netpoll.Event) {
+
+	// 	if ev&(netpoll.EventReadHup|netpoll.EventHup) != 0 {
+	// 		_ = e.Poller.Stop(readDescriptor)
+	// 		deleteClient()
+	// 		//e.log.Debug().Msgf("user with id={%s} was disconnected", client.UserId)
+	// 		e.log.Debug().Msg(ev.String())
+	// 		return
+	// 	}
+	// 	payload, isControl, err := e.HandleRead(client)
+	// 	if err != nil {
+	// 		_ = e.Poller.Stop(readDescriptor)
+	// 		e.log.Debug().Err(err)
+	// 		return
+	// 	} else {
+	// 		if !isControl {
+	// 			e.sendMsg(Message{Client: client, Msg: []byte(strings.ToUpper(string(payload)))}, companyName)
+	// 			e.log.Debug().Msgf("Message from user={%s}: {%s}\n", client.UserId, payload)
+	// 		}
+	// 		_ = e.Poller.Resume(readDescriptor)
+	// 	}
+	// })
+//}
 
 // SaveState saves the state of active CompanyHubs.
 func (e *Engine) SaveState() error {
@@ -357,7 +430,7 @@ func (e *Engine) RestoreState() error {
 		return err
 	}
 	for _, c := range stats.Stats {
-		
+
 		if c.Expired == true {
 			continue
 		}

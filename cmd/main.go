@@ -18,10 +18,12 @@ import (
 	"time"
 
 	"github.com/Dmitry-dms/avalanche/internal"
+	"github.com/Dmitry-dms/avalanche/pkg/epoll"
 	"github.com/Dmitry-dms/avalanche/pkg/msg_controllers/redis"
 	"github.com/Dmitry-dms/avalanche/pkg/pool"
 	"github.com/Dmitry-dms/avalanche/pkg/serializer/easyjson"
 	"github.com/Dmitry-dms/avalanche/pkg/websocket"
+
 	"github.com/joho/godotenv"
 	"github.com/pkg/errors"
 
@@ -29,7 +31,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/rs/zerolog"
 
-	"github.com/mailru/easygo/netpoll"
+
 )
 
 var (
@@ -105,6 +107,15 @@ func ParseConfig() (*internal.Config, error) {
 }
 
 func main() {
+	// Increase resources limitations
+	var rLimit syscall.Rlimit
+	if err := syscall.Getrlimit(syscall.RLIMIT_NOFILE, &rLimit); err != nil {
+		panic(err)
+	}
+	rLimit.Cur = rLimit.Max
+	if err := syscall.Setrlimit(syscall.RLIMIT_NOFILE, &rLimit); err != nil {
+		panic(err)
+	}
 
 	tick := time.NewTicker(30 * time.Second)
 	defer tick.Stop()
@@ -120,17 +131,18 @@ func main() {
 		zerolg.Fatal().Err(errors.Unwrap(err))
 	}
 
-	poller, err := netpoll.New(nil)
+	poller, err := epoll.MkEpoll()
+	//poller, err := netpoll.New(nil)
 	if err != nil {
 		zerolg.Fatal().Err(err).Msg("error create netpoll")
 	}
 	cache := internal.NewRamCache()
-	ln, err := net.Listen("tcp", ":"+config.Port)
+	ln, err := net.Listen("tcp", ":8000")
 	if err != nil {
 		zerolg.Fatal().Err(err).Msgf("Can't start listening on port %s", config.Port)
 	}
 
-	poolConnection := pool.NewPool(200, 150, 20)
+	poolConnection := pool.NewPool(2000, 350, 20)
 	poolCommands := pool.NewPool(50, 1, 3)
 
 	jsonSerializer := &easyjson.CustomEasyJson{}
@@ -152,23 +164,41 @@ func main() {
 
 	zerolg.Info().Msgf("accepting websocket connections on port %s", config.Port)
 
-	acceptDesc := netpoll.Must(netpoll.HandleListener(ln, netpoll.EventRead|netpoll.EventOneShot))
+	// go func() {
+	// 	mux := http.NewServeMux()
+	// 	mux.HandleFunc("/", engine.HandleHTTP)
+	// 	log.Printf("run http websocket server on %s", config.Port)
+	// 	if err := http.ListenAndServe(":"+config.Port, mux); err != nil {
+	// 		zerolg.Fatal().Err(err).Msgf("Can't start listening on port %s", config.MonitoringPort)
+	// 	}
+	// }()
+	// acceptDesc := netpoll.Must(netpoll.HandleListener(ln, netpoll.EventRead|netpoll.EventOneShot))
+	// _ = engine.Poller.Start(acceptDesc, func(e netpoll.Event) {
+	// 	engine.PoolConnection.Schedule(func() {
 
-	_ = engine.Poller.Start(acceptDesc, func(e netpoll.Event) {
-
-		engine.PoolConnection.Schedule(func() {
-
+	// 		conn, err := ln.Accept()
+	// 		if err != nil {
+	// 			zerolg.Debug().Err(err)
+	// 		} else {
+	// 			upg := &websocket.GobwasUpgrader{}
+	// 			go engine.Handle(conn, upg)
+	// 		}
+	// 	})
+	// 	_ = engine.Poller.Resume(acceptDesc)
+	// })
+	go func() {
+		for {
 			conn, err := ln.Accept()
-			if err != nil {
-				zerolg.Debug().Err(err)
-			} else {
-				upg := &websocket.GobwasUpgrader{}
-				go engine.Handle(conn, upg)
-			}
-
-		})
-		_ = engine.Poller.Resume(acceptDesc)
-	})
+			engine.PoolConnection.Schedule(func() {
+				if err != nil {
+					zerolg.Debug().Err(err)
+				} else {
+					upg := &websocket.GobwasUpgrader{}
+					go engine.Handle(conn, upg)
+				}
+			})
+		}
+	}()
 
 	go func() {
 
@@ -214,6 +244,7 @@ func main() {
 	}
 
 }
+
 func mid(h http.HandlerFunc) http.HandlerFunc {
 	return func(rw http.ResponseWriter, r *http.Request) {
 		runtime.GC()

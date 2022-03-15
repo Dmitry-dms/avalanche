@@ -1,6 +1,7 @@
 /test
 /test2-client-gorilla1
 /client
+/client2
 /test3-client-gorilla
 /test5-auth
 /redis
@@ -8,3 +9,4 @@ binsize.svg
 client.exe
 Makefile
 /prometheus
+setup.sh

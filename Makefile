@@ -13,12 +13,16 @@ r:
 cl:
 	go run client/client.go ${WS_PORT} ${NUM_CONNECT}
 c:
-	docker run --rm --ulimit nofile=20000:25000 client ./goapp ${WS_ADDR}:${WS_PORT} ${MIN} ${DELTA}
+	docker run --rm --net testnet --ip 172.18.0.10 --ulimit nofile=100000:150000 client ./goapp ${WS_ADDR}:${WS_PORT} ${MIN} ${DELTA}
 cw:
-	go run ./client/client.go ${WS_ADDR}:${WS_PORT} ${MIN} ${MAX}
+	go run ./client/client.go ${WS_ADDR}:${WS_PORT} ${MIN} ${DELTA}
+cw2:
+	go run ./client2/client.go ${WS_ADDR}:${WS_PORT} ${MIN} ${DELTA}
+setup:
+	bash setup.sh ${WS_ADDR}:${WS_PORT} ${MIN} ${DELTA} 3
 run:
 	# docker run -d --name=pyro -p 4040:4040 pyroscope/pyroscope server
-	docker run  --name=ava --ulimit nofile=220000:230000 -p ${WS_PORT}:8000 -p ${MONITORING_PORT}:8090 avalanche
+	docker run  --name=ava --net testnet --ulimit nofile=220000:230000 -p ${WS_PORT}:8000 -p ${MONITORING_PORT}:8090 avalanche
 graph:
 	#docker run -d -p 9090:9090 my-prometheus
 	docker run -d --name=grafana -p 3000:3000 grafana/grafana	
@@ -30,8 +34,20 @@ run1:
 	docker run -d --rm --name=ava --network=chat-system -p 8446:8000 -p 8667:8090  avalanche
 	docker run --name=monitoring-chat --network=chat-system -p 8780:8780 -d monitoring:latest
 start-t:
-	#docker run --ulimit nofile=25000:30000 --name=test -d test
-	#docker run --ulimit nofile=25000:30000 --name=test2 -d test2
+	docker run -d --name=t1 --rm --net testnet --ip 172.18.0.5 --ulimit nofile=40000:45000 client ./goapp 172.17.0.1:8000 ${MIN} ${DELTA}
+	docker run -d --name=t2 --rm --net testnet --ip 172.18.0.6 --ulimit nofile=40000:45000 client ./goapp 172.17.0.1:8000  $(shell expr $(DELTA) + 1 ) ${DELTA}
+	docker run -d --name=t3 --rm --net testnet --ip 172.18.0.7 --ulimit nofile=40000:45000 client ./goapp 172.17.0.1:8000  $(shell expr $(DELTA) + $(DELTA) + 1 ) ${DELTA}
+	docker run -d --name=t4 --rm --net testnet --ip 172.18.0.8 --ulimit nofile=40000:45000 client ./goapp 172.17.0.1:8000  $(shell expr $(DELTA) + $(DELTA) + $(DELTA) + 1 ) ${DELTA}
+	docker run -d --name=t5 --rm --net testnet --ip 172.18.0.9 --ulimit nofile=40000:45000 client ./goapp 172.17.0.1:8000  $(shell expr $(DELTA) + $(DELTA) + $(DELTA) + $(DELTA) + 1 ) ${DELTA}
+destr:
+	docker rm -vf $(docker ps -q --filter label=go-websockets)
+
+stop-t:
+	docker stop t1
+	docker stop t2
+	docker stop t3
+	docker stop t4
+	docker stop t5
 rm:
 	docker rm -f ava
 	docker rm -f test
